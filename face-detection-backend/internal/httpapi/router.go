@@ -28,7 +28,7 @@ func NewRouter(store store.Store) http.Handler {
 	v1 := router.Group("/api")
 	v1.POST("/tenants", api.createTenant)
 	v1.GET("/tenants", api.listTenants)
-	v1.GET("/tenant", api.getTenant)
+	v1.GET("/tenants/:tenantId", api.getTenant)
 	v1.PUT("/tenant", api.updateTenant)
 	v1.DELETE("/tenant", api.deleteTenant)
 
@@ -70,6 +70,7 @@ func (api *API) index(c *gin.Context) {
 			"GET /docs",
 			"GET /openapi.yaml",
 			"POST /api/tenants",
+			"GET /api/tenants/{tenantId}",
 			"POST /api/users",
 			"POST /api/login",
 			"POST /api/clients",
@@ -161,11 +162,7 @@ func (api *API) listTenants(c *gin.Context) {
 }
 
 func (api *API) getTenant(c *gin.Context) {
-	tenantID, ok := tenantIDFromHeader(c)
-	if !ok {
-		return
-	}
-	value, err := api.service.GetTenant(c.Request.Context(), tenantID)
+	value, err := api.service.GetTenant(c.Request.Context(), c.Param("tenantId"))
 	respond(c, http.StatusOK, value, err)
 }
 

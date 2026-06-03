@@ -141,6 +141,13 @@ func TestTenantAPIs(t *testing.T) {
 		tenant := createTenant(t, app, "Acme", 3)
 		require.Equal(t, domain.StatusActive, tenant.Status)
 		require.Equal(t, 3, tenant.Configs.ModelConfig.EmbeddingDimension)
+
+		detail := app.request(http.MethodGet, "/api/tenants/"+tenant.ID, nil)
+		require.Equal(t, http.StatusOK, detail.Code, detail.Body.String())
+		require.Equal(t, tenant.ID, decode[domain.Tenant](t, detail).ID)
+
+		oldHeaderDetail := app.requestWithTenant(http.MethodGet, "/api/tenant", tenant.ID, nil)
+		require.Equal(t, http.StatusNotFound, oldHeaderDetail.Code)
 	})
 
 	t.Run("TC-TENANT-002 missing model config", func(t *testing.T) {

@@ -309,21 +309,6 @@ paths:
   "/api/tenant":
     parameters:
     - "$ref": "#/components/parameters/TenantHeader"
-    get:
-      tags:
-      - Tenants
-      summary: Get tenant
-      x-curl-example: 'curl -s http://localhost:8080/api/tenant -H ''x-tenant-id:
-        tenant-id'''
-      responses:
-        '200':
-          description: Tenant
-          content:
-            application/json:
-              schema:
-                "$ref": "#/components/schemas/Tenant"
-        '404':
-          "$ref": "#/components/responses/NotFound"
     put:
       tags:
       - Tenants
@@ -568,6 +553,23 @@ paths:
                     type: array
                     items:
                       "$ref": "#/components/schemas/AuthEvent"
+  "/api/tenants/{tenantId}":
+    parameters:
+    - "$ref": "#/components/parameters/TenantId"
+    get:
+      tags:
+      - Tenants
+      summary: Get tenant details
+      x-curl-example: curl -s http://localhost:8080/api/tenants/{tenantId}
+      responses:
+        '200':
+          description: Tenant
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Tenant"
+        '404':
+          "$ref": "#/components/responses/NotFound"
 components:
   parameters:
     UserId:
@@ -591,6 +593,13 @@ components:
         type: string
       description: Tenant id for tenant-scoped API calls. Tenant id is no longer accepted
         in tenant-scoped URL paths.
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Tenant id used only for tenant detail lookup.
   responses:
     ValidationError:
       description: Validation error
