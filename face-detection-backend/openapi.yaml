@@ -1,0 +1,881 @@
+openapi: 3.0.3
+info:
+  title: Stage 1 Offline Face Auth Backend
+  version: 1.0.0
+  description: Backend APIs for tenant, user, client onboarding, offline profile download, event sync, purge acknowledgement, and admin demo views. Stage 1 has no authentication.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Health
+  - name: Tenants
+  - name: Users
+  - name: Login
+  - name: Clients
+  - name: Runtime
+  - name: Admin
+paths:
+  /:
+    get:
+      tags: [Health]
+      summary: Service index
+      x-curl-example: curl -s http://localhost:8080/
+      responses:
+        "200":
+          description: Service index with common endpoints
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service:
+                    type: string
+                    example: face-detection-backend
+                  status:
+                    type: string
+                    example: ok
+                  endpoints:
+                    type: array
+                    items:
+                      type: string
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      x-curl-example: curl -s http://localhost:8080/health
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /api/tenants:
+    post:
+      tags: [Tenants]
+      summary: Create tenant
+      x-curl-example: >
+        curl -X POST http://localhost:8080/api/tenants -H 'Content-Type: application/json'
+        -d '{"name":"Acme Security","configs":{"MODEL_CONFIG":{"modelVersion":"facenet-v1","faceThreshold":0.82,"livenessThreshold":0.77,"embeddingDimension":3,"modelChecksum":"sha256:demo","active":true},"LIVENESS_CONFIG":{"challengeTypes":["BLINK","SMILE"],"active":true}}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+            examples:
+              valid:
+                value:
+                  name: Acme Security
+                  configs:
+                    MODEL_CONFIG:
+                      modelVersion: facenet-v1
+                      faceThreshold: 0.82
+                      livenessThreshold: 0.77
+                      embeddingDimension: 3
+                      modelChecksum: sha256:demo
+                      active: true
+                    LIVENESS_CONFIG:
+                      challengeTypes: [BLINK, SMILE]
+                      active: true
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+    get:
+      tags: [Tenants]
+      summary: List tenants
+      x-curl-example: curl -s http://localhost:8080/api/tenants
+      responses:
+        "200":
+          description: Tenants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tenant"
+  /api/tenants/{tenantId}:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+    get:
+      tags: [Tenants]
+      summary: Get tenant
+      x-curl-example: curl -s http://localhost:8080/api/tenants/{tenantId}
+      responses:
+        "200":
+          description: Tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Tenants]
+      summary: Update tenant config, name, or status
+      x-curl-example: >
+        curl -X PUT http://localhost:8080/api/tenants/{tenantId} -H 'Content-Type: application/json'
+        -d '{"name":"Acme Security","status":"ACTIVE","configs":{"MODEL_CONFIG":{"modelVersion":"facenet-v2","faceThreshold":0.9,"livenessThreshold":0.8,"embeddingDimension":3,"modelChecksum":"sha256:demo-v2","active":true},"LIVENESS_CONFIG":{"challengeTypes":["BLINK","TURN_LEFT"],"active":true}}}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantRequest"
+      responses:
+        "200":
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Tenants]
+      summary: Soft-delete tenant by marking it inactive
+      x-curl-example: curl -X DELETE http://localhost:8080/api/tenants/{tenantId}
+      responses:
+        "200":
+          description: Inactive tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+  /api/tenants/{tenantId}/users:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+    post:
+      tags: [Users]
+      summary: Create user under tenant
+      x-curl-example: >
+        curl -X POST http://localhost:8080/api/tenants/{tenantId}/users -H 'Content-Type: application/json'
+        -d '{"employeeId":"E-100","username":"asha.rao","password":"demo-pass","name":"Asha Rao","role":"Security","embeddings":[{"id":"front","vector":[0.1,0.2,0.3]},{"id":"left","vector":[0.3,0.2,0.1]}]}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    get:
+      tags: [Users]
+      summary: List users for tenant
+      x-curl-example: curl -s http://localhost:8080/api/tenants/{tenantId}/users
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+  /api/tenants/{tenantId}/users/{userId}:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+      - $ref: "#/components/parameters/UserId"
+    get:
+      tags: [Users]
+      summary: Get user
+      x-curl-example: curl -s http://localhost:8080/api/tenants/{tenantId}/users/{userId}
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    put:
+      tags: [Users]
+      summary: Update user profile or embeddings
+      x-curl-example: >
+        curl -X PUT http://localhost:8080/api/tenants/{tenantId}/users/{userId} -H 'Content-Type: application/json'
+        -d '{"employeeId":"E-100","username":"asha.rao","password":"new-demo-pass","name":"Asha Rao","role":"Lead Security","embeddings":[{"id":"refresh","vector":[0.7,0.8,0.9]}]}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    delete:
+      tags: [Users]
+      summary: Soft-delete user by marking inactive
+      x-curl-example: curl -X DELETE http://localhost:8080/api/tenants/{tenantId}/users/{userId}
+      responses:
+        "200":
+          description: Inactive user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+  /api/login:
+    post:
+      tags: [Login]
+      summary: Stage 1 username/password login returning tenantId and user info
+      description: Stage 1 performs simple string matching against the stored username and password. Stage 2 will replace this with JWT-based identity.
+      x-curl-example: >
+        curl -X POST http://localhost:8080/api/login -H 'Content-Type: application/json'
+        -d '{"username":"asha.rao","password":"demo-pass"}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login context for device registration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+  /api/clients:
+    post:
+      tags: [Clients]
+      summary: Register client device after Stage 1 login
+      x-curl-example: >
+        curl -X POST http://localhost:8080/api/clients -H 'Content-Type: application/json'
+        -d '{"tenantId":"tenant-id","userId":"user-id","deviceType":"PHONE","deviceName":"Pixel 9","platform":"ANDROID","appVersion":"1.0.0","imei":"123456789012345"}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClientRequest"
+      responses:
+        "201":
+          description: Registered client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+  /api/tenants/{tenantId}/clients:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+    get:
+      tags: [Clients]
+      summary: List clients for tenant
+      x-curl-example: curl -s http://localhost:8080/api/tenants/{tenantId}/clients
+      responses:
+        "200":
+          description: Clients
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clients:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Client"
+  /api/tenants/{tenantId}/clients/{clientId}:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+      - $ref: "#/components/parameters/ClientId"
+    get:
+      tags: [Clients]
+      summary: Get tenant client
+      x-curl-example: curl -s http://localhost:8080/api/tenants/{tenantId}/clients/{clientId}
+      responses:
+        "200":
+          description: Client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    put:
+      tags: [Clients]
+      summary: Update client metadata or status
+      description: tenantId and userId are immutable and rejected if provided.
+      x-curl-example: >
+        curl -X PUT http://localhost:8080/api/tenants/{tenantId}/clients/{clientId} -H 'Content-Type: application/json'
+        -d '{"deviceName":"Pixel 10","platform":"ANDROID","appVersion":"1.1.0","imei":"999"}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClientRequest"
+      responses:
+        "200":
+          description: Updated client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+    delete:
+      tags: [Clients]
+      summary: Deactivate client
+      x-curl-example: curl -X DELETE http://localhost:8080/api/tenants/{tenantId}/clients/{clientId}
+      responses:
+        "200":
+          description: Inactive client
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Client"
+  /api/clients/{clientId}/offline-profile:
+    parameters:
+      - $ref: "#/components/parameters/ClientId"
+    get:
+      tags: [Runtime]
+      summary: Generate offline profile from clientId only
+      x-curl-example: curl -s http://localhost:8080/api/clients/{clientId}/offline-profile
+      responses:
+        "200":
+          description: Offline profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OfflineProfile"
+        "409":
+          $ref: "#/components/responses/Conflict"
+  /api/clients/{clientId}/sync/events:
+    parameters:
+      - $ref: "#/components/parameters/ClientId"
+    post:
+      tags: [Runtime]
+      summary: Bulk sync offline auth events
+      x-curl-example: >
+        curl -X POST http://localhost:8080/api/clients/{clientId}/sync/events -H 'Content-Type: application/json'
+        -d '{"events":[{"eventId":"evt-001","result":"SUCCESS","faceScore":0.93,"livenessScore":0.88,"challengeTypes":["BLINK"],"latencyMs":120,"embedding":[0.1,0.2,0.3],"capturedAt":"2026-06-03T10:00:00Z"}]}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SyncEventsRequest"
+      responses:
+        "200":
+          description: Per-event sync result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncEventsResponse"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+  /api/clients/{clientId}/sync/purge-ack:
+    parameters:
+      - $ref: "#/components/parameters/ClientId"
+    post:
+      tags: [Runtime]
+      summary: Acknowledge local purge of synced events
+      x-curl-example: >
+        curl -X POST http://localhost:8080/api/clients/{clientId}/sync/purge-ack -H 'Content-Type: application/json'
+        -d '{"eventIds":["evt-001","evt-002"]}'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurgeAckRequest"
+      responses:
+        "200":
+          description: Purge acknowledgement result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PurgeAckResponse"
+  /api/admin/tenants:
+    get:
+      tags: [Admin]
+      summary: Admin tenant list
+      x-curl-example: curl -s http://localhost:8080/api/admin/tenants
+      responses:
+        "200":
+          description: Tenants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Tenant"
+  /api/admin/tenants/{tenantId}/users:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+    get:
+      tags: [Admin]
+      summary: Admin tenant users
+      x-curl-example: curl -s http://localhost:8080/api/admin/tenants/{tenantId}/users
+      responses:
+        "200":
+          description: Tenant users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/User"
+  /api/admin/tenants/{tenantId}/clients:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+    get:
+      tags: [Admin]
+      summary: Admin tenant clients
+      x-curl-example: curl -s http://localhost:8080/api/admin/tenants/{tenantId}/clients
+      responses:
+        "200":
+          description: Tenant clients
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  clients:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Client"
+  /api/admin/tenants/{tenantId}/events:
+    parameters:
+      - $ref: "#/components/parameters/TenantId"
+    get:
+      tags: [Admin]
+      summary: Admin tenant auth events
+      x-curl-example: curl -s http://localhost:8080/api/admin/tenants/{tenantId}/events
+      responses:
+        "200":
+          description: Tenant events
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/AuthEvent"
+components:
+  parameters:
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema:
+        type: string
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+    ClientId:
+      name: clientId
+      in: path
+      required: true
+      schema:
+        type: string
+        example: cli_550e8400-e29b-41d4-a716-446655440000
+  responses:
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Conflict or inactive state
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: VALIDATION_ERROR
+            message:
+              type: string
+              example: MODEL_CONFIG.embeddingDimension must be greater than zero
+    CreateTenantRequest:
+      type: object
+      required: [name, configs]
+      properties:
+        name:
+          type: string
+        configs:
+          $ref: "#/components/schemas/TenantConfig"
+    UpdateTenantRequest:
+      allOf:
+        - $ref: "#/components/schemas/CreateTenantRequest"
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [ACTIVE, INACTIVE]
+    Tenant:
+      allOf:
+        - type: object
+          required: [id, name, status, configs, createdAt, updatedAt]
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            status:
+              type: string
+              enum: [ACTIVE, INACTIVE]
+            configs:
+              $ref: "#/components/schemas/TenantConfig"
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    TenantConfig:
+      type: object
+      required: [MODEL_CONFIG, LIVENESS_CONFIG]
+      properties:
+        MODEL_CONFIG:
+          $ref: "#/components/schemas/ModelConfig"
+        LIVENESS_CONFIG:
+          $ref: "#/components/schemas/LivenessConfig"
+    ModelConfig:
+      type: object
+      required: [modelVersion, faceThreshold, livenessThreshold, embeddingDimension, modelChecksum, active]
+      properties:
+        modelVersion:
+          type: string
+        faceThreshold:
+          type: number
+          minimum: 0
+          maximum: 1
+        livenessThreshold:
+          type: number
+          minimum: 0
+          maximum: 1
+        embeddingDimension:
+          type: integer
+          minimum: 1
+        modelChecksum:
+          type: string
+        active:
+          type: boolean
+    LivenessConfig:
+      type: object
+      required: [challengeTypes, active]
+      properties:
+        challengeTypes:
+          type: array
+          items:
+            type: string
+            enum: [BLINK, SMILE, TURN_LEFT, TURN_RIGHT, NOD]
+        active:
+          type: boolean
+    CreateUserRequest:
+      type: object
+      required: [employeeId, username, password, name, embeddings]
+      properties:
+        employeeId:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+          description: Stage 1 demo password stored for simple string matching. It is not returned in user responses.
+        name:
+          type: string
+        role:
+          type: string
+        embeddings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Embedding"
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        tenantId:
+          type: string
+        employeeId:
+          type: string
+        username:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+        embeddings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Embedding"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    Embedding:
+      type: object
+      required: [vector]
+      properties:
+        id:
+          type: string
+        vector:
+          type: array
+          items:
+            type: number
+          example: [0.1, 0.2, 0.3]
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          example: asha.rao
+        password:
+          type: string
+          format: password
+          example: demo-pass
+    LoginResponse:
+      type: object
+      properties:
+        tenantId:
+          type: string
+        userId:
+          type: string
+        user:
+          $ref: "#/components/schemas/User"
+    CreateClientRequest:
+      type: object
+      required: [tenantId, userId, deviceType, deviceName, platform, appVersion]
+      properties:
+        tenantId:
+          type: string
+        userId:
+          type: string
+        deviceType:
+          type: string
+          example: PHONE
+        deviceName:
+          type: string
+          example: Pixel 9
+        platform:
+          type: string
+          example: ANDROID
+        appVersion:
+          type: string
+          example: 1.0.0
+        imei:
+          type: string
+    UpdateClientRequest:
+      type: object
+      properties:
+        deviceType:
+          type: string
+        deviceName:
+          type: string
+        platform:
+          type: string
+        appVersion:
+          type: string
+        imei:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, INACTIVE]
+    Client:
+      allOf:
+        - $ref: "#/components/schemas/CreateClientRequest"
+        - type: object
+          properties:
+            id:
+              type: string
+            clientId:
+              type: string
+            status:
+              type: string
+              enum: [ACTIVE, INACTIVE]
+            activatedAt:
+              type: string
+              format: date-time
+            deactivatedAt:
+              type: string
+              format: date-time
+              nullable: true
+            createdAt:
+              type: string
+              format: date-time
+            updatedAt:
+              type: string
+              format: date-time
+    OfflineProfile:
+      type: object
+      properties:
+        clientId:
+          type: string
+        tenantId:
+          type: string
+        userId:
+          type: string
+        employeeId:
+          type: string
+        userName:
+          type: string
+        modelConfig:
+          $ref: "#/components/schemas/ModelConfig"
+        livenessConfig:
+          $ref: "#/components/schemas/LivenessConfig"
+        embeddings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Embedding"
+        validUntil:
+          type: string
+          format: date-time
+        signature:
+          type: string
+          nullable: true
+          example: null
+    SyncEventsRequest:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/SyncEvent"
+    SyncEvent:
+      type: object
+      required: [eventId, result, faceScore, livenessScore, challengeTypes, latencyMs, embedding, capturedAt]
+      properties:
+        eventId:
+          type: string
+        result:
+          type: string
+          enum: [SUCCESS, FACE_FAILED, LIVENESS_FAILED, ERROR]
+        failureReason:
+          type: string
+        faceScore:
+          type: number
+        livenessScore:
+          type: number
+        challengeTypes:
+          type: array
+          items:
+            type: string
+        latencyMs:
+          type: integer
+        embedding:
+          type: array
+          items:
+            type: number
+        capturedAt:
+          type: string
+          format: date-time
+    SyncEventsResponse:
+      type: object
+      properties:
+        acceptedEventIds:
+          type: array
+          items:
+            type: string
+        duplicateEventIds:
+          type: array
+          items:
+            type: string
+        rejectedEvents:
+          type: array
+          items:
+            type: object
+            properties:
+              eventId:
+                type: string
+              reason:
+                type: string
+    PurgeAckRequest:
+      type: object
+      required: [eventIds]
+      properties:
+        eventIds:
+          type: array
+          items:
+            type: string
+    PurgeAckResponse:
+      type: object
+      properties:
+        purgedEventIds:
+          type: array
+          items:
+            type: string
+        unknownEventIds:
+          type: array
+          items:
+            type: string
+    AuthEvent:
+      allOf:
+        - $ref: "#/components/schemas/SyncEvent"
+        - type: object
+          properties:
+            id:
+              type: string
+            tenantId:
+              type: string
+            userId:
+              type: string
+            clientId:
+              type: string
+            receivedAt:
+              type: string
+              format: date-time
+            purgeStatus:
+              type: string
+              enum: [PENDING, PURGED]
