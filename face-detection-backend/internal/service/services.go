@@ -244,11 +244,18 @@ type LoginResponse struct {
 	User     domain.User `json:"user"`
 }
 
-func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResponse, error) {
+func (s *Service) Login(ctx context.Context, tenantID string, req LoginRequest) (LoginResponse, error) {
 	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
 		return LoginResponse{}, BadRequest("username and password are required")
 	}
-	user, err := s.store.FindUserByUsername(ctx, req.Username)
+	tenant, err := s.GetTenant(ctx, tenantID)
+	if err != nil {
+		return LoginResponse{}, err
+	}
+	if tenant.Status != domain.StatusActive {
+		return LoginResponse{}, Conflict("tenant is inactive")
+	}
+	user, err := s.store.FindUserByUsername(ctx, tenantID, req.Username)
 	if errors.Is(err, store.ErrNotFound) {
 		return LoginResponse{}, NotFound("user")
 	}
@@ -257,13 +264,6 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResponse, e
 	}
 	if user.Password != req.Password {
 		return LoginResponse{}, Conflict("invalid username or password")
-	}
-	tenant, err := s.GetTenant(ctx, user.TenantID)
-	if err != nil {
-		return LoginResponse{}, err
-	}
-	if tenant.Status != domain.StatusActive {
-		return LoginResponse{}, Conflict("tenant is inactive")
 	}
 	if user.Status != domain.StatusActive {
 		return LoginResponse{}, Conflict("user is inactive")

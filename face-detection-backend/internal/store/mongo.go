@@ -45,6 +45,9 @@ func (s *MongoStore) Close(ctx context.Context) error {
 }
 
 func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
+	if _, err := s.users.Indexes().DropOne(ctx, "username_1"); err != nil && !isIndexNotFound(err) {
+		return err
+	}
 	indexes := []struct {
 		collection *mongo.Collection
 		models     []mongo.IndexModel
@@ -53,7 +56,7 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 			Keys:    bson.D{{Key: "tenantId", Value: 1}, {Key: "employeeId", Value: 1}},
 			Options: options.Index().SetUnique(true),
 		}, {
-			Keys:    bson.D{{Key: "username", Value: 1}},
+			Keys:    bson.D{{Key: "tenantId", Value: 1}, {Key: "username", Value: 1}},
 			Options: options.Index().SetUnique(true).SetSparse(true),
 		}}},
 		{s.clients, []mongo.IndexModel{{
@@ -73,6 +76,11 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func isIndexNotFound(err error) bool {
+	var commandErr mongo.CommandError
+	return errors.As(err, &commandErr) && (commandErr.Code == 26 || commandErr.Code == 27)
 }
 
 func mapMongoErr(err error) error {
@@ -169,9 +177,9 @@ func (s *MongoStore) FindUserByEmployeeID(ctx context.Context, tenantID, employe
 	return user, mapMongoErr(err)
 }
 
-func (s *MongoStore) FindUserByUsername(ctx context.Context, username string) (domain.User, error) {
+func (s *MongoStore) FindUserByUsername(ctx context.Context, tenantID, username string) (domain.User, error) {
 	var user domain.User
-	err := s.users.FindOne(ctx, bson.M{"username": username}).Decode(&user)
+	err := s.users.FindOne(ctx, bson.M{"tenantId": tenantID, "username": username}).Decode(&user)
 	return user, mapMongoErr(err)
 }
 

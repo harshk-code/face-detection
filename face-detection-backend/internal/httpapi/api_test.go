@@ -246,13 +246,20 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 	t.Run("TC-CLIENT-001 login returns tenant and user ids", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, _ := seedActiveFlow(t, app)
-		rec := app.request(http.MethodPost, "/api/login", map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
+		rec := app.requestWithTenant(http.MethodPost, "/api/login", tenant.ID, map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		body := decode[service.LoginResponse](t, rec)
 		require.Equal(t, tenant.ID, body.TenantID)
 		require.Equal(t, user.ID, body.UserID)
 		require.Equal(t, user.Username, body.User.Username)
 		require.NotContains(t, rec.Body.String(), "password")
+
+		missingHeader := app.request(http.MethodPost, "/api/login", map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
+		require.Equal(t, http.StatusBadRequest, missingHeader.Code)
+
+		otherTenant := createTenant(t, app, "Other", 3)
+		wrongTenant := app.requestWithTenant(http.MethodPost, "/api/login", otherTenant.ID, map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
+		require.Equal(t, http.StatusNotFound, wrongTenant.Code)
 	})
 
 	t.Run("TC-CLIENT-002 and TC-CLIENT-006 create clients with unique ids", func(t *testing.T) {

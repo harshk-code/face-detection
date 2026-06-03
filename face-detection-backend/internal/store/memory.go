@@ -81,7 +81,7 @@ func (s *MemoryStore) CreateUser(_ context.Context, user domain.User) (domain.Us
 		if existing.TenantID == user.TenantID && existing.EmployeeID == user.EmployeeID {
 			return domain.User{}, ErrDuplicate
 		}
-		if existing.Username != "" && existing.Username == user.Username {
+		if existing.TenantID == user.TenantID && existing.Username != "" && existing.Username == user.Username {
 			return domain.User{}, ErrDuplicate
 		}
 	}
@@ -132,11 +132,11 @@ func (s *MemoryStore) FindUserByEmployeeID(_ context.Context, tenantID, employee
 	return domain.User{}, ErrNotFound
 }
 
-func (s *MemoryStore) FindUserByUsername(_ context.Context, username string) (domain.User, error) {
+func (s *MemoryStore) FindUserByUsername(_ context.Context, tenantID, username string) (domain.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, user := range s.users {
-		if user.Username == username {
+		if user.TenantID == tenantID && user.Username == username {
 			return user, nil
 		}
 	}
@@ -153,7 +153,7 @@ func (s *MemoryStore) UpdateUser(_ context.Context, user domain.User) (domain.Us
 		if existing.ID != user.ID && existing.TenantID == user.TenantID && existing.EmployeeID == user.EmployeeID {
 			return domain.User{}, ErrDuplicate
 		}
-		if existing.ID != user.ID && existing.Username != "" && existing.Username == user.Username {
+		if existing.ID != user.ID && existing.TenantID == user.TenantID && existing.Username != "" && existing.Username == user.Username {
 			return domain.User{}, ErrDuplicate
 		}
 	}

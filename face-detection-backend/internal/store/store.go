@@ -26,7 +26,7 @@ type Store interface {
 	GetUser(ctx context.Context, tenantID, userID string) (domain.User, error)
 	GetUserByID(ctx context.Context, userID string) (domain.User, error)
 	FindUserByEmployeeID(ctx context.Context, tenantID, employeeID string) (domain.User, error)
-	FindUserByUsername(ctx context.Context, username string) (domain.User, error)
+	FindUserByUsername(ctx context.Context, tenantID, username string) (domain.User, error)
 	UpdateUser(ctx context.Context, user domain.User) (domain.User, error)
 	SoftDeleteUser(ctx context.Context, tenantID, userID string) (domain.User, error)
 

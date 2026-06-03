@@ -245,11 +245,15 @@ func (api *API) deleteUser(c *gin.Context) {
 }
 
 func (api *API) login(c *gin.Context) {
+	tenantID, ok := tenantIDFromHeader(c)
+	if !ok {
+		return
+	}
 	req, ok := bindJSON[service.LoginRequest](c)
 	if !ok {
 		return
 	}
-	value, err := api.service.Login(c.Request.Context(), req)
+	value, err := api.service.Login(c.Request.Context(), tenantID, req)
 	respond(c, http.StatusOK, value, err)
 }
 

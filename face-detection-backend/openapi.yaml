@@ -158,13 +158,13 @@ paths:
     post:
       tags:
       - Login
-      summary: Stage 1 username/password login returning tenantId and user info
-      description: Stage 1 performs simple string matching against the stored username
-        and password. Stage 2 will replace this with JWT-based identity.
-      x-curl-example: 'curl -X POST http://localhost:8080/api/login -H ''Content-Type:
-        application/json'' -d ''{"username":"asha.rao","password":"demo-pass"}''
-
-'
+      summary: Stage 1 tenant-scoped username/password login returning tenantId and
+        user info
+      description: Stage 1 requires x-tenant-id and performs simple string matching
+        against a user stored under that tenant. Stage 2 will replace this with JWT-based
+        identity.
+      x-curl-example: 'curl -X POST http://localhost:8080/api/login -H ''x-tenant-id:
+        tenant-id'' -H ''Content-Type: application/json'' -d ''{"username":"asha.rao","password":"demo-pass"}'''
       requestBody:
         required: true
         content:
@@ -178,6 +178,8 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/LoginResponse"
+      parameters:
+      - "$ref": "#/components/parameters/TenantHeader"
   "/api/clients":
     post:
       tags:
