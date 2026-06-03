@@ -29,6 +29,10 @@ func newTestApp(t *testing.T) *testApp {
 }
 
 func (a *testApp) request(method, path string, body any) *httptest.ResponseRecorder {
+	return a.requestWithTenant(method, path, "", body)
+}
+
+func (a *testApp) requestWithTenant(method, path, tenantID string, body any) *httptest.ResponseRecorder {
 	a.t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -36,6 +40,9 @@ func (a *testApp) request(method, path string, body any) *httptest.ResponseRecor
 	}
 	req := httptest.NewRequest(method, path, &buf)
 	req.Header.Set("Content-Type", "application/json")
+	if tenantID != "" {
+		req.Header.Set("x-tenant-id", tenantID)
+	}
 	rec := httptest.NewRecorder()
 	a.router.ServeHTTP(rec, req)
 	return rec
@@ -90,14 +97,13 @@ func createTenant(t *testing.T, app *testApp, name string, dimension int) domain
 }
 
 func createUser(t *testing.T, app *testApp, tenantID, employeeID string) domain.User {
-	rec := app.request(http.MethodPost, "/api/tenants/"+tenantID+"/users", validUserReq(employeeID, [][]float64{{0.1, 0.2, 0.3}, {0.3, 0.2, 0.1}}))
+	rec := app.requestWithTenant(http.MethodPost, "/api/users", tenantID, validUserReq(employeeID, [][]float64{{0.1, 0.2, 0.3}, {0.3, 0.2, 0.1}}))
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	return decode[domain.User](t, rec)
 }
 
 func createClient(t *testing.T, app *testApp, tenantID, userID string) domain.Client {
-	rec := app.request(http.MethodPost, "/api/clients", map[string]any{
-		"tenantId":   tenantID,
+	rec := app.requestWithTenant(http.MethodPost, "/api/clients", tenantID, map[string]any{
 		"userId":     userID,
 		"deviceType": "PHONE",
 		"deviceName": "Pixel 9",
@@ -123,6 +129,10 @@ func TestHealth(t *testing.T) {
 
 	rec := app.request(http.MethodGet, "/health", nil)
 	require.Equal(t, http.StatusOK, rec.Code)
+
+	docs := app.request(http.MethodGet, "/docs", nil)
+	require.Equal(t, http.StatusOK, docs.Code)
+	require.Contains(t, docs.Body.String(), "SwaggerUIBundle")
 }
 
 func TestTenantAPIs(t *testing.T) {
@@ -158,9 +168,9 @@ func TestTenantAPIs(t *testing.T) {
 		tenant, _, client := seedActiveFlow(t, app)
 		req := validTenantReq("Acme Updated", 3)
 		req["configs"].(map[string]any)["MODEL_CONFIG"].(map[string]any)["faceThreshold"] = 0.91
-		rec := app.request(http.MethodPut, "/api/tenants/"+tenant.ID, req)
+		rec := app.requestWithTenant(http.MethodPut, "/api/tenant", tenant.ID, req)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-		profileRec := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusOK, profileRec.Code, profileRec.Body.String())
 		profile := decode[service.OfflineProfile](t, profileRec)
 		require.Equal(t, 0.91, profile.ModelConfig.FaceThreshold)
@@ -169,11 +179,11 @@ func TestTenantAPIs(t *testing.T) {
 	t.Run("TC-TENANT-006 and TC-TENANT-007 soft-delete blocks profile", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, _, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodDelete, "/api/tenants/"+tenant.ID, nil)
+		rec := app.requestWithTenant(http.MethodDelete, "/api/tenant", tenant.ID, nil)
 		require.Equal(t, http.StatusOK, rec.Code)
 		deleted := decode[domain.Tenant](t, rec)
 		require.Equal(t, domain.StatusInactive, deleted.Status)
-		profileRec := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusConflict, profileRec.Code)
 	})
 }
@@ -191,7 +201,7 @@ func TestUserAPIs(t *testing.T) {
 		app := newTestApp(t)
 		tenant := createTenant(t, app, "Acme", 3)
 		_ = createUser(t, app, tenant.ID, "E-100")
-		rec := app.request(http.MethodPost, "/api/tenants/"+tenant.ID+"/users", validUserReq("E-100", [][]float64{{0.1, 0.2, 0.3}}))
+		rec := app.requestWithTenant(http.MethodPost, "/api/users", tenant.ID, validUserReq("E-100", [][]float64{{0.1, 0.2, 0.3}}))
 		require.Equal(t, http.StatusConflict, rec.Code)
 	})
 
@@ -200,23 +210,23 @@ func TestUserAPIs(t *testing.T) {
 		t1 := createTenant(t, app, "Acme", 3)
 		t2 := createTenant(t, app, "Beta", 3)
 		_ = createUser(t, app, t1.ID, "E-100")
-		rec := app.request(http.MethodPost, "/api/tenants/"+t2.ID+"/users", validUserReq("E-100", [][]float64{{0.1, 0.2, 0.3}}))
+		rec := app.requestWithTenant(http.MethodPost, "/api/users", t2.ID, validUserReq("E-100", [][]float64{{0.1, 0.2, 0.3}}))
 		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	})
 
 	t.Run("TC-USER-004 embedding dimension mismatch", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant := createTenant(t, app, "Acme", 3)
-		rec := app.request(http.MethodPost, "/api/tenants/"+tenant.ID+"/users", validUserReq("E-100", [][]float64{{0.1, 0.2}}))
+		rec := app.requestWithTenant(http.MethodPost, "/api/users", tenant.ID, validUserReq("E-100", [][]float64{{0.1, 0.2}}))
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
 	t.Run("TC-USER-005 update embeddings reflected in profile", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodPut, "/api/tenants/"+tenant.ID+"/users/"+user.ID, validUserReq("E-100", [][]float64{{0.7, 0.8, 0.9}}))
+		rec := app.requestWithTenant(http.MethodPut, "/api/users/"+user.ID, tenant.ID, validUserReq("E-100", [][]float64{{0.7, 0.8, 0.9}}))
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-		profileRec := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		profile := decode[service.OfflineProfile](t, profileRec)
 		require.Len(t, profile.Embeddings, 1)
 		require.Equal(t, []float64{0.7, 0.8, 0.9}, profile.Embeddings[0].Vector)
@@ -225,9 +235,9 @@ func TestUserAPIs(t *testing.T) {
 	t.Run("TC-USER-006 and TC-USER-007 soft-delete blocks profile", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodDelete, "/api/tenants/"+tenant.ID+"/users/"+user.ID, nil)
+		rec := app.requestWithTenant(http.MethodDelete, "/api/users/"+user.ID, tenant.ID, nil)
 		require.Equal(t, http.StatusOK, rec.Code)
-		profileRec := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusConflict, profileRec.Code)
 	})
 }
@@ -257,7 +267,7 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 
 	t.Run("TC-CLIENT-003 missing tenant", func(t *testing.T) {
 		app := newTestApp(t)
-		rec := app.request(http.MethodPost, "/api/clients", map[string]any{"tenantId": "missing", "userId": "missing", "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
+		rec := app.requestWithTenant(http.MethodPost, "/api/clients", "missing", map[string]any{"userId": "missing", "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
 		require.Equal(t, http.StatusNotFound, rec.Code)
 	})
 
@@ -266,18 +276,18 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 		t1 := createTenant(t, app, "Acme", 3)
 		t2 := createTenant(t, app, "Beta", 3)
 		u2 := createUser(t, app, t2.ID, "B-1")
-		missing := app.request(http.MethodPost, "/api/clients", map[string]any{"tenantId": t1.ID, "userId": "missing", "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
+		missing := app.requestWithTenant(http.MethodPost, "/api/clients", t1.ID, map[string]any{"userId": "missing", "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
 		require.Equal(t, http.StatusNotFound, missing.Code)
-		otherTenant := app.request(http.MethodPost, "/api/clients", map[string]any{"tenantId": t1.ID, "userId": u2.ID, "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
+		otherTenant := app.requestWithTenant(http.MethodPost, "/api/clients", t1.ID, map[string]any{"userId": u2.ID, "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
 		require.Equal(t, http.StatusNotFound, otherTenant.Code)
 	})
 
 	t.Run("TC-CLIENT-007 immutable ownership and TC-CLIENT-008 metadata update", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, _, client := seedActiveFlow(t, app)
-		bad := app.request(http.MethodPut, "/api/tenants/"+tenant.ID+"/clients/"+client.ClientID, map[string]any{"tenantId": "new"})
+		bad := app.requestWithTenant(http.MethodPut, "/api/clients/"+client.ClientID, tenant.ID, map[string]any{"tenantId": "new"})
 		require.Equal(t, http.StatusBadRequest, bad.Code)
-		good := app.request(http.MethodPut, "/api/tenants/"+tenant.ID+"/clients/"+client.ClientID, map[string]any{"deviceName": "Pixel 10", "platform": "ANDROID", "appVersion": "1.1.0", "imei": "999"})
+		good := app.requestWithTenant(http.MethodPut, "/api/clients/"+client.ClientID, tenant.ID, map[string]any{"deviceName": "Pixel 10", "platform": "ANDROID", "appVersion": "1.1.0", "imei": "999"})
 		require.Equal(t, http.StatusOK, good.Code, good.Body.String())
 		updated := decode[domain.Client](t, good)
 		require.Equal(t, "Pixel 10", updated.DeviceName)
@@ -287,19 +297,19 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 	t.Run("TC-CLIENT-009 and TC-CLIENT-010 deactivate client blocks profile", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, _, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodDelete, "/api/tenants/"+tenant.ID+"/clients/"+client.ClientID, nil)
+		rec := app.requestWithTenant(http.MethodDelete, "/api/clients/"+client.ClientID, tenant.ID, nil)
 		require.Equal(t, http.StatusOK, rec.Code)
 		deactivated := decode[domain.Client](t, rec)
 		require.Equal(t, domain.StatusInactive, deactivated.Status)
 		require.NotNil(t, deactivated.DeactivatedAt)
-		profileRec := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusConflict, profileRec.Code)
 	})
 
 	t.Run("TC-PROFILE-001 through TC-PROFILE-005 profile contract", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		rec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		profile := decode[service.OfflineProfile](t, rec)
 		require.Equal(t, client.ClientID, profile.ClientID)
@@ -309,8 +319,10 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 		require.Equal(t, user.Name, profile.UserName)
 		require.Len(t, profile.Embeddings, 2)
 		require.Nil(t, profile.Signature)
-		unknown := app.request(http.MethodGet, "/api/clients/unknown/offline-profile", nil)
+		unknown := app.requestWithTenant(http.MethodGet, "/api/clients/unknown/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusNotFound, unknown.Code)
+		missingHeader := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
+		require.Equal(t, http.StatusBadRequest, missingHeader.Code)
 	})
 }
 
@@ -380,11 +392,11 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 	t.Run("TC-SYNC-001 store valid event payload and TC-ADMIN-003/004 list details", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": []map[string]any{event("evt-1")}})
+		rec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": []map[string]any{event("evt-1")}})
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		body := decode[service.SyncEventsResponse](t, rec)
 		require.Equal(t, []string{"evt-1"}, body.AcceptedEventIDs)
-		eventsRec := app.request(http.MethodGet, "/api/admin/tenants/"+tenant.ID+"/events", nil)
+		eventsRec := app.requestWithTenant(http.MethodGet, "/api/admin/events", tenant.ID, nil)
 		require.Equal(t, http.StatusOK, eventsRec.Code)
 		var listed struct {
 			Events []domain.AuthEvent `json:"events"`
@@ -400,23 +412,23 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 
 	t.Run("TC-SYNC-002 reject more than 100 events", func(t *testing.T) {
 		app := newTestApp(t)
-		_, _, client := seedActiveFlow(t, app)
+		tenant, _, client := seedActiveFlow(t, app)
 		events := []map[string]any{}
 		for i := 0; i < 101; i++ {
 			events = append(events, event("evt-many"))
 		}
-		rec := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": events})
+		rec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": events})
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
 	t.Run("TC-SYNC-003 idempotent retry and TC-SYNC-009 mixed batch", func(t *testing.T) {
 		app := newTestApp(t)
-		_, _, client := seedActiveFlow(t, app)
-		first := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": []map[string]any{event("evt-1")}})
+		tenant, _, client := seedActiveFlow(t, app)
+		first := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": []map[string]any{event("evt-1")}})
 		require.Equal(t, http.StatusOK, first.Code)
 		bad := event("evt-bad")
 		bad["result"] = "NOPE"
-		second := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": []map[string]any{event("evt-1"), event("evt-2"), bad}})
+		second := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": []map[string]any{event("evt-1"), event("evt-2"), bad}})
 		require.Equal(t, http.StatusOK, second.Code, second.Body.String())
 		body := decode[service.SyncEventsResponse](t, second)
 		require.Equal(t, []string{"evt-2"}, body.AcceptedEventIDs)
@@ -426,12 +438,12 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 
 	t.Run("TC-SYNC-004 invalid result and TC-SYNC-005 embedding mismatch rejected", func(t *testing.T) {
 		app := newTestApp(t)
-		_, _, client := seedActiveFlow(t, app)
+		tenant, _, client := seedActiveFlow(t, app)
 		invalidResult := event("evt-invalid-result")
 		invalidResult["result"] = "BAD"
 		badEmbedding := event("evt-bad-embedding")
 		badEmbedding["embedding"] = []float64{1}
-		rec := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": []map[string]any{invalidResult, badEmbedding}})
+		rec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": []map[string]any{invalidResult, badEmbedding}})
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		body := decode[service.SyncEventsResponse](t, rec)
 		require.Empty(t, body.AcceptedEventIDs)
@@ -441,14 +453,14 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 	t.Run("TC-SYNC-007 historical inactive-client event and TC-SYNC-008 post-deactivation event", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, _, client := seedActiveFlow(t, app)
-		rec := app.request(http.MethodDelete, "/api/tenants/"+tenant.ID+"/clients/"+client.ClientID, nil)
+		rec := app.requestWithTenant(http.MethodDelete, "/api/clients/"+client.ClientID, tenant.ID, nil)
 		require.Equal(t, http.StatusOK, rec.Code)
 		deactivated := decode[domain.Client](t, rec)
 		before := event("evt-before")
 		before["capturedAt"] = deactivated.DeactivatedAt.Add(-time.Minute).Format(time.RFC3339Nano)
 		after := event("evt-after")
 		after["capturedAt"] = deactivated.DeactivatedAt.Add(time.Minute).Format(time.RFC3339Nano)
-		syncRec := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": []map[string]any{before, after}})
+		syncRec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": []map[string]any{before, after}})
 		require.Equal(t, http.StatusOK, syncRec.Code, syncRec.Body.String())
 		body := decode[service.SyncEventsResponse](t, syncRec)
 		require.Equal(t, []string{"evt-before"}, body.AcceptedEventIDs)
@@ -460,16 +472,16 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 		app := newTestApp(t)
 		tenant, _, client := seedActiveFlow(t, app)
 		_, _, otherClient := seedActiveFlow(t, app)
-		_ = app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", map[string]any{"events": []map[string]any{event("evt-1")}})
-		_ = app.request(http.MethodPost, "/api/clients/"+otherClient.ClientID+"/sync/events", map[string]any{"events": []map[string]any{event("other-evt")}})
-		rec := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/purge-ack", map[string]any{"eventIds": []string{"evt-1", "missing", "other-evt"}})
+		_ = app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", tenant.ID, map[string]any{"events": []map[string]any{event("evt-1")}})
+		_ = app.requestWithTenant(http.MethodPost, "/api/clients/"+otherClient.ClientID+"/sync/events", otherClient.TenantID, map[string]any{"events": []map[string]any{event("other-evt")}})
+		rec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/purge-ack", tenant.ID, map[string]any{"eventIds": []string{"evt-1", "missing", "other-evt"}})
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		body := decode[service.PurgeAckResponse](t, rec)
 		require.Equal(t, []string{"evt-1"}, body.PurgedEventIDs)
 		require.ElementsMatch(t, []string{"missing", "other-evt"}, body.UnknownEventIDs)
-		again := app.request(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/purge-ack", map[string]any{"eventIds": []string{"evt-1"}})
+		again := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/purge-ack", tenant.ID, map[string]any{"eventIds": []string{"evt-1"}})
 		require.Equal(t, http.StatusOK, again.Code)
-		eventsRec := app.request(http.MethodGet, "/api/admin/tenants/"+tenant.ID+"/events", nil)
+		eventsRec := app.requestWithTenant(http.MethodGet, "/api/admin/events", tenant.ID, nil)
 		var listed struct {
 			Events []domain.AuthEvent `json:"events"`
 		}
@@ -482,8 +494,8 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 		app := newTestApp(t)
 		t1, _, _ := seedActiveFlow(t, app)
 		_, _, _ = seedActiveFlow(t, app)
-		usersRec := app.request(http.MethodGet, "/api/admin/tenants/"+t1.ID+"/users", nil)
-		clientsRec := app.request(http.MethodGet, "/api/admin/tenants/"+t1.ID+"/clients", nil)
+		usersRec := app.requestWithTenant(http.MethodGet, "/api/admin/users", t1.ID, nil)
+		clientsRec := app.requestWithTenant(http.MethodGet, "/api/admin/clients", t1.ID, nil)
 		var users struct {
 			Users []domain.User `json:"users"`
 		}

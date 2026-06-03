@@ -272,7 +272,7 @@ func (s *Service) Login(ctx context.Context, req LoginRequest) (LoginResponse, e
 }
 
 type CreateClientRequest struct {
-	TenantID   string `json:"tenantId"`
+	TenantID   string `json:"-"`
 	UserID     string `json:"userId"`
 	DeviceType string `json:"deviceType"`
 	DeviceName string `json:"deviceName"`
@@ -454,6 +454,28 @@ func (s *Service) ResolveProfileEligibleClient(ctx context.Context, clientID str
 	return resolved, nil
 }
 
+func (s *Service) ResolveTenantScopedClient(ctx context.Context, tenantID, clientID string) (ResolvedClientContext, error) {
+	resolved, err := s.ResolveClient(ctx, clientID)
+	if err != nil {
+		return ResolvedClientContext{}, err
+	}
+	if resolved.Tenant.ID != tenantID {
+		return ResolvedClientContext{}, NotFound("client")
+	}
+	return resolved, nil
+}
+
+func (s *Service) ResolveTenantScopedProfileEligibleClient(ctx context.Context, tenantID, clientID string) (ResolvedClientContext, error) {
+	resolved, err := s.ResolveProfileEligibleClient(ctx, clientID)
+	if err != nil {
+		return ResolvedClientContext{}, err
+	}
+	if resolved.Tenant.ID != tenantID {
+		return ResolvedClientContext{}, NotFound("client")
+	}
+	return resolved, nil
+}
+
 type OfflineProfile struct {
 	ClientID       string                `json:"clientId"`
 	TenantID       string                `json:"tenantId"`
@@ -467,8 +489,8 @@ type OfflineProfile struct {
 	Signature      *string               `json:"signature"`
 }
 
-func (s *Service) OfflineProfile(ctx context.Context, clientID string) (OfflineProfile, error) {
-	resolved, err := s.ResolveProfileEligibleClient(ctx, clientID)
+func (s *Service) OfflineProfile(ctx context.Context, tenantID, clientID string) (OfflineProfile, error) {
+	resolved, err := s.ResolveTenantScopedProfileEligibleClient(ctx, tenantID, clientID)
 	if err != nil {
 		return OfflineProfile{}, err
 	}
@@ -518,14 +540,14 @@ type SyncEventsResponse struct {
 	RejectedEvents    []RejectedEvent `json:"rejectedEvents"`
 }
 
-func (s *Service) SyncEvents(ctx context.Context, clientID string, req SyncEventsRequest) (SyncEventsResponse, error) {
+func (s *Service) SyncEvents(ctx context.Context, tenantID, clientID string, req SyncEventsRequest) (SyncEventsResponse, error) {
 	if len(req.Events) == 0 {
 		return SyncEventsResponse{}, BadRequest("events is required")
 	}
 	if len(req.Events) > 100 {
 		return SyncEventsResponse{}, BadRequest("events cannot exceed 100 per request")
 	}
-	resolved, err := s.ResolveClient(ctx, clientID)
+	resolved, err := s.ResolveTenantScopedClient(ctx, tenantID, clientID)
 	if err != nil {
 		return SyncEventsResponse{}, err
 	}
@@ -594,11 +616,11 @@ type PurgeAckResponse struct {
 	UnknownEventIDs []string `json:"unknownEventIds"`
 }
 
-func (s *Service) PurgeAck(ctx context.Context, clientID string, req PurgeAckRequest) (PurgeAckResponse, error) {
+func (s *Service) PurgeAck(ctx context.Context, tenantID, clientID string, req PurgeAckRequest) (PurgeAckResponse, error) {
 	if len(req.EventIDs) == 0 {
 		return PurgeAckResponse{}, BadRequest("eventIds is required")
 	}
-	if _, err := s.ResolveClient(ctx, clientID); err != nil {
+	if _, err := s.ResolveTenantScopedClient(ctx, tenantID, clientID); err != nil {
 		return PurgeAckResponse{}, err
 	}
 	purged, unknown, err := s.store.MarkEventsPurged(ctx, clientID, req.EventIDs)
