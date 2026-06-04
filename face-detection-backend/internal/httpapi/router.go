@@ -48,7 +48,6 @@ func NewRouter(store store.Store) http.Handler {
 	v1.GET("/clients/:clientId/offline-profile", api.offlineProfile)
 	v1.POST("/clients/:clientId/sync/events", api.syncEvents)
 	v1.POST("/clients/:clientId/sync/purge-ack", api.purgeAck)
-	v1.POST("/offline/onboarding-sync", api.offlineOnboardingSync)
 
 	v1.GET("/admin/tenants", api.listTenants)
 	v1.GET("/admin/users", api.listUsers)
@@ -341,19 +340,6 @@ func (api *API) purgeAck(c *gin.Context) {
 		return
 	}
 	value, err := api.service.PurgeAck(c.Request.Context(), tenantID, c.Param("clientId"), req)
-	respond(c, http.StatusOK, value, err)
-}
-
-func (api *API) offlineOnboardingSync(c *gin.Context) {
-	tenantID, ok := tenantIDFromHeader(c)
-	if !ok {
-		return
-	}
-	req, ok := bindJSON[service.OfflineOnboardingSyncRequest](c)
-	if !ok {
-		return
-	}
-	value, err := api.service.OfflineOnboardingSync(c.Request.Context(), tenantID, req)
 	respond(c, http.StatusOK, value, err)
 }
 
