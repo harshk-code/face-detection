@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   Building2,
@@ -129,7 +129,21 @@ type UserForm = {
   password: string;
   name: string;
   role: string;
+  status: Status;
   embeddings: EmbeddingForm[];
+};
+
+type OfflineProfile = {
+  clientId: string;
+  tenantId: string;
+  userId: string;
+  employeeId: string;
+  userName: string;
+  modelConfig: ModelConfig;
+  livenessConfig: LivenessConfig;
+  embeddings: Embedding[];
+  validUntil: string;
+  signature: string | null;
 };
 
 type ClientForm = {
@@ -164,6 +178,26 @@ const defaultEmbeddings: Embedding[] = [
   { id: "left", vector: [0.3, 0.2, 0.1] }
 ];
 
+const TOKEN_STORAGE_KEY = "fa_admin_token";
+
+let authToken: string | null =
+  typeof localStorage !== "undefined" ? localStorage.getItem(TOKEN_STORAGE_KEY) : null;
+
+function setAuthToken(token: string | null) {
+  authToken = token;
+  if (typeof localStorage === "undefined") return;
+  if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  else localStorage.removeItem(TOKEN_STORAGE_KEY);
+}
+
+class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function api<T>(path: string, options: RequestInit = {}, tenantId?: string): Promise<T> {
   const headers = new Headers(options.headers);
   if (!(options.body instanceof FormData)) {
@@ -172,12 +206,15 @@ async function api<T>(path: string, options: RequestInit = {}, tenantId?: string
   if (tenantId) {
     headers.set("x-tenant-id", tenantId);
   }
+  if (authToken) {
+    headers.set("Authorization", `Bearer ${authToken}`);
+  }
   const response = await fetch(path, { ...options, headers });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   if (!response.ok) {
     const message = data?.error?.message ?? response.statusText;
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
   return data as T;
 }
@@ -251,6 +288,7 @@ function createUserForm(user?: User): UserForm {
     password: "",
     name: user?.name ?? "",
     role: user?.role ?? "",
+    status: user?.status ?? "ACTIVE",
     embeddings: createEmbeddingForms(user?.embeddings ?? defaultEmbeddings)
   };
 }
@@ -268,6 +306,9 @@ function createClientForm(userId = "", client?: Client): ClientForm {
 }
 
 export function App() {
+  const [token, setToken] = useState<string | null>(authToken);
+  const [offlineProfile, setOfflineProfile] = useState<OfflineProfile | null>(null);
+  const [profileValid, setProfileValid] = useState<boolean | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
   const [tenantEditor, setTenantEditor] = useState<Tenant | null | "new">(null);
@@ -312,8 +353,29 @@ export function App() {
   }, [events, selectedClient, selectedUser]);
 
   useEffect(() => {
-    void loadTenants();
-  }, []);
+    if (token) void loadTenants();
+  }, [token]);
+
+  function logout() {
+    setAuthToken(null);
+    setToken(null);
+    setSelectedTenant(null);
+    setTenants([]);
+    setUsers([]);
+    setClients([]);
+    setEvents([]);
+    setMessage("");
+    setError("");
+  }
+
+  async function handleLogin(username: string, password: string) {
+    const data = await api<{ token: string }>("/api/admin/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    });
+    setAuthToken(data.token);
+    setToken(data.token);
+  }
 
   async function run(action: () => Promise<void>) {
     setLoading(true);
@@ -322,6 +384,11 @@ export function App() {
     try {
       await action();
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        logout();
+        setError("Session expired — please sign in again.");
+        return;
+      }
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
@@ -454,6 +521,7 @@ export function App() {
         username: userForm.username,
         name: userForm.name,
         role: userForm.role,
+        status: userForm.status,
         configs: userMode === "create" ? selectedTenant.configs : selectedUser?.configs ?? selectedTenant.configs,
         embeddings: parseEmbeddings(userForm.embeddings)
       };
@@ -489,6 +557,62 @@ export function App() {
         setSelectedUser(null);
         setSelectedClient(null);
       }
+      await refreshSelectedTenant();
+    });
+  }
+
+  async function reactivateUser(user: User) {
+    if (!selectedTenant) return;
+    await run(async () => {
+      const updated = await api<User>(
+        `/api/users/${user.id}`,
+        { method: "PUT", body: JSON.stringify({ status: "ACTIVE" }) },
+        selectedTenant.id
+      );
+      setMessage("User reactivated");
+      if (selectedUser?.id === user.id) {
+        setSelectedUser(updated);
+        setUserForm(createUserForm(updated));
+      }
+      await refreshSelectedTenant();
+    });
+  }
+
+  async function openOfflineProfile(client: Client) {
+    if (!selectedTenant) return;
+    setProfileValid(null);
+    await run(async () => {
+      const profile = await api<OfflineProfile>(
+        `/api/clients/${client.clientId}/offline-profile`,
+        {},
+        selectedTenant.id
+      );
+      setOfflineProfile(profile);
+      if (profile.signature) {
+        const result = await api<{ valid: boolean }>("/api/verify-profile", {
+          method: "POST",
+          body: JSON.stringify({ profile })
+        });
+        setProfileValid(result.valid);
+      } else {
+        setProfileValid(null);
+      }
+    });
+  }
+
+  async function purgeEvent(event: AuthEvent) {
+    if (!selectedTenant) return;
+    await run(async () => {
+      const result = await api<{ purgedEventIds: string[]; unknownEventIds: string[] }>(
+        `/api/clients/${event.clientId}/sync/purge-ack`,
+        { method: "POST", body: JSON.stringify({ eventIds: [event.eventId] }) },
+        selectedTenant.id
+      );
+      setMessage(
+        result.purgedEventIds.length > 0
+          ? `Purged ${result.purgedEventIds.length} event(s)`
+          : "No matching events to purge"
+      );
       await refreshSelectedTenant();
     });
   }
@@ -606,6 +730,10 @@ export function App() {
     </div>
   );
 
+  if (!token) {
+    return <LoginScreen onLogin={handleLogin} />;
+  }
+
   if (!selectedTenant) {
     return (
       <main className="tenantListPage">
@@ -614,7 +742,10 @@ export function App() {
             <h1>Face Auth</h1>
             <p>Multi-tenant Management Panel</p>
           </div>
-          {notice}
+          <div className="heroActions">
+            {notice}
+            <button className="outlineButton" onClick={logout}><LogOut size={18} /> Sign out</button>
+          </div>
         </header>
 
         <section className="tableCard tenantTableCard">
@@ -706,7 +837,8 @@ export function App() {
           <SidebarButton active={section === "config"} icon={<Settings size={18} />} label="Tenant Config" onClick={() => setSection("config")} />
         </nav>
         <div className="sidebarFooter">
-          <button onClick={() => setSelectedTenant(null)}><LogOut size={18} /> Switch Tenant</button>
+          <button onClick={() => setSelectedTenant(null)}><Building2 size={18} /> Switch Tenant</button>
+          <button onClick={logout}><LogOut size={18} /> Sign out</button>
         </div>
       </aside>
 
@@ -748,6 +880,8 @@ export function App() {
             startCreateUser={startCreateUser}
             saveUser={saveUser}
             deactivateUser={deactivateUser}
+            reactivateUser={reactivateUser}
+            openOfflineProfile={openOfflineProfile}
             setUserForm={setUserForm}
             updateEmbedding={updateEmbedding}
             addEmbedding={addEmbedding}
@@ -770,11 +904,12 @@ export function App() {
             startCreateClient={startCreateClient}
             saveClient={saveClient}
             deactivateClient={deactivateClient}
+            openOfflineProfile={openOfflineProfile}
             setClientForm={setClientForm}
           />
         )}
         {section === "events" && (
-          <EventsSection events={events} selectedEvent={selectedEvent} setSelectedEvent={setSelectedEvent} />
+          <EventsSection events={events} selectedEvent={selectedEvent} setSelectedEvent={setSelectedEvent} purgeEvent={purgeEvent} />
         )}
         {section === "config" && (
           <section className="tableCard editorCard">
@@ -791,6 +926,16 @@ export function App() {
           </section>
         )}
       </section>
+      {offlineProfile && (
+        <OfflineProfileModal
+          profile={offlineProfile}
+          valid={profileValid}
+          onClose={() => {
+            setOfflineProfile(null);
+            setProfileValid(null);
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -881,6 +1026,8 @@ function UsersSection(props: {
   startCreateUser: () => void;
   saveUser: () => Promise<void>;
   deactivateUser: (user: User) => Promise<void>;
+  reactivateUser: (user: User) => Promise<void>;
+  openOfflineProfile: (client: Client) => Promise<void>;
   setUserForm: (form: UserForm) => void;
   updateEmbedding: (index: number, patch: Partial<EmbeddingForm>) => void;
   addEmbedding: () => void;
@@ -907,9 +1054,12 @@ function UsersSection(props: {
             user.embeddings.length,
             <StatusPill key="status" status={user.status} />,
             <div className="tableActions" key="actions">
-              <button className="iconOnly" title="View user" onClick={() => props.openUser(user)}><Eye size={18} /></button>
-              <button className="iconOnly" title="Edit user" onClick={() => props.openUser(user)}><Edit3 size={18} /></button>
-              <button className="iconOnly dangerText" title="Deactivate user" onClick={() => void props.deactivateUser(user)}><Trash2 size={18} /></button>
+              <button className="iconOnly" title="View / edit user" onClick={() => props.openUser(user)}><Edit3 size={18} /></button>
+              {user.status === "INACTIVE" ? (
+                <button className="iconOnly successText" title="Reactivate user" onClick={() => void props.reactivateUser(user)}><CheckCircle2 size={18} /></button>
+              ) : (
+                <button className="iconOnly dangerText" title="Deactivate user" onClick={() => void props.deactivateUser(user)}><Trash2 size={18} /></button>
+              )}
             </div>
           ])}
           onRowClick={(index) => props.openUser(props.users[index])}
@@ -953,6 +1103,7 @@ function UsersSection(props: {
                 shortDate(client.updatedAt),
                 <div className="tableActions" key="actions">
                   <button className="iconOnly" title="View client" onClick={() => props.openClient(client)}><Eye size={18} /></button>
+                  <button className="iconOnly" title="Offline profile" onClick={() => void props.openOfflineProfile(client)}><ShieldCheck size={18} /></button>
                   <button className="iconOnly dangerText" title="Deactivate client" onClick={() => void props.deactivateClient(client)}><CircleSlash size={18} /></button>
                 </div>
               ])}
@@ -977,6 +1128,7 @@ function ClientsSection(props: {
   startCreateClient: (userId?: string) => void;
   saveClient: () => Promise<void>;
   deactivateClient: (client: Client) => Promise<void>;
+  openOfflineProfile: (client: Client) => Promise<void>;
   setClientForm: (form: ClientForm) => void;
 }) {
   return (
@@ -996,6 +1148,7 @@ function ClientsSection(props: {
             <StatusPill key="status" status={client.status} />,
             <div className="tableActions" key="actions">
               <button className="iconOnly" title="View client" onClick={() => props.openClient(client)}><Eye size={18} /></button>
+              <button className="iconOnly" title="Offline profile" onClick={() => void props.openOfflineProfile(client)}><ShieldCheck size={18} /></button>
               <button className="iconOnly dangerText" title="Deactivate client" onClick={() => void props.deactivateClient(client)}><Trash2 size={18} /></button>
             </div>
           ])}
@@ -1008,7 +1161,7 @@ function ClientsSection(props: {
   );
 }
 
-function EventsSection({ events, selectedEvent, setSelectedEvent }: { events: AuthEvent[]; selectedEvent: AuthEvent | null; setSelectedEvent: (event: AuthEvent) => void }) {
+function EventsSection({ events, selectedEvent, setSelectedEvent, purgeEvent }: { events: AuthEvent[]; selectedEvent: AuthEvent | null; setSelectedEvent: (event: AuthEvent) => void; purgeEvent: (event: AuthEvent) => Promise<void> }) {
   return (
     <section className="detailLayout">
       <section className="tableCard">
@@ -1020,7 +1173,12 @@ function EventsSection({ events, selectedEvent, setSelectedEvent }: { events: Au
             `${event.faceScore} / ${event.livenessScore}`,
             `${event.latencyMs} ms`,
             shortDateTime(event.capturedAt),
-            event.purgeStatus
+            <div className="tableActions" key="purge">
+              <span className={`purgeBadge ${event.purgeStatus === "PURGED" ? "purged" : "pending"}`}>{event.purgeStatus}</span>
+              {event.purgeStatus === "PENDING" && (
+                <button className="iconOnly" title="Send purge acknowledgement" onClick={() => void purgeEvent(event)}><Trash2 size={16} /></button>
+              )}
+            </div>
           ])}
           onRowClick={(index) => setSelectedEvent(events[index])}
           emptyText="No auth entries found."
@@ -1044,6 +1202,11 @@ function EventsSection({ events, selectedEvent, setSelectedEvent }: { events: Au
               <span>Embedding</span>
               <div>{selectedEvent.embedding.map((value, index) => <code key={index}>{value}</code>)}</div>
             </div>
+            {selectedEvent.purgeStatus === "PENDING" && (
+              <div className="actions">
+                <button className="dangerButton" onClick={() => void purgeEvent(selectedEvent)}><Trash2 size={16} /> Acknowledge Purge</button>
+              </div>
+            )}
           </>
         ) : <Empty text="Select an auth entry to inspect details." />}
       </section>
@@ -1066,6 +1229,12 @@ function UserFormView(props: {
         <Field label="Password"><input type="password" value={props.userForm.password} placeholder="Keep blank to retain password" onChange={(event) => props.setUserForm({ ...props.userForm, password: event.target.value })} /></Field>
         <Field label="Name"><input value={props.userForm.name} onChange={(event) => props.setUserForm({ ...props.userForm, name: event.target.value })} /></Field>
         <Field label="Role"><input value={props.userForm.role} onChange={(event) => props.setUserForm({ ...props.userForm, role: event.target.value })} /></Field>
+        <Field label="Status">
+          <select value={props.userForm.status} onChange={(event) => props.setUserForm({ ...props.userForm, status: event.target.value as Status })}>
+            <option>ACTIVE</option>
+            <option>INACTIVE</option>
+          </select>
+        </Field>
       </div>
       <div className="subsection">
         <div className="subsectionHeader spaceBetween">
@@ -1188,6 +1357,88 @@ function TenantConfigForm({
         />
       </div>
     </>
+  );
+}
+
+function LoginScreen({ onLogin }: { onLogin: (username: string, password: string) => Promise<void> }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await onLogin(username.trim(), password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign in failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <main className="loginPage">
+      <form className="loginCard" onSubmit={submit}>
+        <div className="loginBrand">
+          <ShieldCheck size={28} />
+          <div>
+            <h1>Face Auth</h1>
+            <p>Admin Console</p>
+          </div>
+        </div>
+        <Field label="Username">
+          <input value={username} autoFocus onChange={(event) => setUsername(event.target.value)} />
+        </Field>
+        <Field label="Password">
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        </Field>
+        {error && <div className="inlineNotice error">{error}</div>}
+        <button className="primaryButton loginButton" type="submit" disabled={busy}>
+          {busy ? <Loader2 className="spin" size={16} /> : <LogIn size={16} />} Sign in
+        </button>
+      </form>
+    </main>
+  );
+}
+
+function OfflineProfileModal({ profile, valid, onClose }: { profile: OfflineProfile; valid: boolean | null; onClose: () => void }) {
+  const signatureBadge = !profile.signature
+    ? <span className="purgeBadge pending">UNSIGNED</span>
+    : valid === null
+      ? <span className="purgeBadge pending">CHECKING…</span>
+      : valid
+        ? <span className="purgeBadge purged"><CheckCircle2 size={14} /> SIGNATURE VALID</span>
+        : <span className="purgeBadge pending"><CircleSlash size={14} /> SIGNATURE INVALID</span>;
+
+  return (
+    <div className="modalOverlay" onClick={onClose}>
+      <section className="tableCard modalCard" onClick={(event) => event.stopPropagation()}>
+        <div className="cardHeader">
+          <h3><ShieldCheck size={18} /> Offline Profile</h3>
+          <button className="iconOnly" title="Close" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div className="signatureRow">{signatureBadge}</div>
+        <DetailGrid rows={[
+          ["Client ID", profile.clientId],
+          ["User", `${profile.userName} (${profile.employeeId})`],
+          ["Model Version", profile.modelConfig.modelVersion],
+          ["Face / Liveness Threshold", `${profile.modelConfig.faceThreshold} / ${profile.modelConfig.livenessThreshold}`],
+          ["Challenge Types", profile.livenessConfig.challengeTypes.join(", ") || "-"],
+          ["Embeddings", profile.embeddings.length],
+          ["Valid Until", shortDateTime(profile.validUntil)],
+          ["Algorithm", profile.signature ? "Ed25519" : "none"]
+        ]} />
+        {profile.signature && (
+          <div className="subsection">
+            <div className="subsectionHeader"><KeyRound size={16} /> Signature</div>
+            <code className="signatureBlob">{profile.signature}</code>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 

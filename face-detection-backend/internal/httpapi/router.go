@@ -1,24 +1,51 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"errors"
 	"net/http"
 
+	"face-detection-backend/internal/auth"
 	"face-detection-backend/internal/service"
 	"face-detection-backend/internal/store"
 	"github.com/gin-gonic/gin"
 )
 
 type API struct {
-	service *service.Service
+	service   *service.Service
+	auth      *auth.Manager
+	adminUser string
+	adminPass string
+}
+
+// Options configures a router. The zero value yields auth-disabled behaviour
+// with a no-op signer, which keeps tests and local experimentation simple.
+type Options struct {
+	Auth      *auth.Manager
+	Signer    service.ProfileSigner
+	AdminUser string
+	AdminPass string
 }
 
 func NewRouter(store store.Store) http.Handler {
+	return NewRouterWithOptions(store, Options{})
+}
+
+func NewRouterWithOptions(store store.Store, opts Options) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
-	api := &API{service: service.New(store)}
+	if opts.Auth == nil {
+		opts.Auth = auth.NewManager("disabled", false)
+	}
+	api := &API{
+		service:   service.NewWithSigner(store, opts.Signer),
+		auth:      opts.Auth,
+		adminUser: opts.AdminUser,
+		adminPass: opts.AdminPass,
+	}
 	router := gin.New()
 	router.Use(gin.Recovery())
 
+	// Public routes.
 	router.GET("/", api.index)
 	router.GET("/health", api.health)
 	router.GET("/openapi.yaml", api.openapiSpec)
@@ -26,33 +53,43 @@ func NewRouter(store store.Store) http.Handler {
 	router.GET("/swagger", api.swaggerUI)
 
 	v1 := router.Group("/api")
-	v1.POST("/tenants", api.createTenant)
-	v1.GET("/tenants", api.listTenants)
-	v1.GET("/tenants/:tenantId", api.getTenant)
-	v1.PUT("/tenant", api.updateTenant)
-	v1.DELETE("/tenant", api.deleteTenant)
-
-	v1.POST("/users", api.createUser)
-	v1.GET("/users", api.listUsers)
-	v1.GET("/users/:userId", api.getUser)
-	v1.PUT("/users/:userId", api.updateUser)
-	v1.DELETE("/users/:userId", api.deleteUser)
-
+	v1.POST("/admin/login", api.adminLogin)
 	v1.POST("/login", api.login)
-	v1.POST("/clients", api.createClient)
-	v1.GET("/clients", api.listClients)
-	v1.GET("/clients/:clientId", api.getClient)
-	v1.PUT("/clients/:clientId", api.updateClient)
-	v1.DELETE("/clients/:clientId", api.deleteClient)
+	v1.GET("/signing/public-key", api.signingPublicKey)
+	v1.POST("/verify-profile", api.verifyProfile)
 
-	v1.GET("/clients/:clientId/offline-profile", api.offlineProfile)
-	v1.POST("/clients/:clientId/sync/events", api.syncEvents)
-	v1.POST("/clients/:clientId/sync/purge-ack", api.purgeAck)
+	// Admin-only management surface.
+	admin := router.Group("/api")
+	admin.Use(api.auth.RequireAdmin())
+	admin.POST("/tenants", api.createTenant)
+	admin.GET("/tenants", api.listTenants)
+	admin.GET("/tenants/:tenantId", api.getTenant)
+	admin.PUT("/tenant", api.updateTenant)
+	admin.DELETE("/tenant", api.deleteTenant)
 
-	v1.GET("/admin/tenants", api.listTenants)
-	v1.GET("/admin/users", api.listUsers)
-	v1.GET("/admin/clients", api.listClients)
-	v1.GET("/admin/events", api.listEvents)
+	admin.POST("/users", api.createUser)
+	admin.GET("/users", api.listUsers)
+	admin.GET("/users/:userId", api.getUser)
+	admin.PUT("/users/:userId", api.updateUser)
+	admin.DELETE("/users/:userId", api.deleteUser)
+
+	admin.POST("/clients", api.createClient)
+	admin.GET("/clients", api.listClients)
+	admin.GET("/clients/:clientId", api.getClient)
+	admin.PUT("/clients/:clientId", api.updateClient)
+	admin.DELETE("/clients/:clientId", api.deleteClient)
+
+	admin.GET("/admin/tenants", api.listTenants)
+	admin.GET("/admin/users", api.listUsers)
+	admin.GET("/admin/clients", api.listClients)
+	admin.GET("/admin/events", api.listEvents)
+
+	// Device/offline surface: admin tokens (cross-tenant) or tenant-user tokens.
+	device := router.Group("/api")
+	device.Use(api.auth.RequireUserOrAdmin())
+	device.GET("/clients/:clientId/offline-profile", api.offlineProfile)
+	device.POST("/clients/:clientId/sync/events", api.syncEvents)
+	device.POST("/clients/:clientId/sync/purge-ack", api.purgeAck)
 
 	return router
 }
@@ -224,7 +261,7 @@ func (api *API) updateUser(c *gin.Context) {
 	if !ok {
 		return
 	}
-	req, ok := bindJSON[service.CreateUserRequest](c)
+	req, ok := bindJSON[service.UpdateUserRequest](c)
 	if !ok {
 		return
 	}
@@ -251,7 +288,80 @@ func (api *API) login(c *gin.Context) {
 		return
 	}
 	value, err := api.service.Login(c.Request.Context(), tenantID, req)
-	respond(c, http.StatusOK, value, err)
+	if err != nil {
+		respond(c, http.StatusOK, value, err)
+		return
+	}
+	token, expiresAt, err := api.auth.MintUser(value.TenantID, value.UserID, value.User.Role)
+	if err != nil {
+		respond(c, http.StatusInternalServerError, nil, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"tenantId":  value.TenantID,
+		"userId":    value.UserID,
+		"user":      value.User,
+		"token":     token,
+		"expiresAt": expiresAt,
+		"role":      value.User.Role,
+	})
+}
+
+type adminLoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+func (api *API) adminLogin(c *gin.Context) {
+	req, ok := bindJSON[adminLoginRequest](c)
+	if !ok {
+		return
+	}
+	userMatch := subtle.ConstantTimeCompare([]byte(req.Username), []byte(api.adminUser)) == 1
+	passMatch := subtle.ConstantTimeCompare([]byte(req.Password), []byte(api.adminPass)) == 1
+	if api.adminUser == "" || api.adminPass == "" || !userMatch || !passMatch {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": service.AppError{
+			Code: "UNAUTHORIZED", Msg: "invalid admin credentials", Status: http.StatusUnauthorized,
+		}})
+		return
+	}
+	token, expiresAt, err := api.auth.MintAdmin(req.Username)
+	if err != nil {
+		respond(c, http.StatusInternalServerError, nil, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"token":     token,
+		"expiresAt": expiresAt,
+		"role":      auth.RoleAdmin,
+	})
+}
+
+func (api *API) signingPublicKey(c *gin.Context) {
+	key, algorithm := api.service.SigningPublicKey()
+	c.JSON(http.StatusOK, gin.H{
+		"algorithm": algorithm,
+		"publicKey": key,
+		"signed":    key != "",
+	})
+}
+
+type verifyProfileRequest struct {
+	Profile   service.OfflineProfile `json:"profile"`
+	Signature string                 `json:"signature"`
+}
+
+func (api *API) verifyProfile(c *gin.Context) {
+	req, ok := bindJSON[verifyProfileRequest](c)
+	if !ok {
+		return
+	}
+	signature := req.Signature
+	if signature == "" && req.Profile.Signature != nil {
+		signature = *req.Profile.Signature
+	}
+	valid := signature != "" && api.service.VerifyProfile(req.Profile, signature)
+	c.JSON(http.StatusOK, gin.H{"valid": valid})
 }
 
 func (api *API) createClient(c *gin.Context) {

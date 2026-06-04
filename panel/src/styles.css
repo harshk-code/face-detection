@@ -733,3 +733,89 @@ code {
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Auth + offline-profile additions --- */
+.heroActions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.successText { color: #047857; }
+
+.loginPage {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.loginCard {
+  width: 380px;
+  max-width: 100%;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 32px 28px;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.loginBrand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: #4f46e5;
+}
+
+.loginBrand h1 { margin: 0; font-size: 24px; color: #111827; }
+.loginBrand p { margin: 2px 0 0; color: #6b7280; font-size: 14px; }
+.loginButton { justify-content: center; width: 100%; }
+
+.purgeBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.purgeBadge.pending { background: #fef3c7; color: #92400e; }
+.purgeBadge.purged { background: #d1fae5; color: #065f46; }
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.modalCard {
+  width: 560px;
+  max-width: 100%;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.signatureRow { margin: 4px 0 14px; }
+
+.signatureBlob {
+  display: block;
+  width: 100%;
+  word-break: break-all;
+  background: #0f172a;
+  color: #a5f3fc;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}

@@ -19,20 +19,31 @@ type Service struct {
 }
 
 func New(store store.Store) *Service {
+	return NewWithSigner(store, NoopSigner{})
+}
+
+// NewWithSigner builds a Service using the supplied profile signer.
+func NewWithSigner(store store.Store, signer ProfileSigner) *Service {
+	if signer == nil {
+		signer = NoopSigner{}
+	}
 	return &Service{
 		store:         store,
-		signer:        NoopSigner{},
+		signer:        signer,
 		resolverCache: cache.NewTTL[string, ResolvedClientContext](2 * time.Minute),
 	}
 }
 
-type ProfileSigner interface {
-	Sign(ctx context.Context, profile OfflineProfile) (*string, error)
+// SigningPublicKey returns the base64 public key and algorithm used to sign
+// offline profiles, so devices can verify them offline.
+func (s *Service) SigningPublicKey() (string, string) {
+	return s.signer.PublicKeyBase64(), s.signer.Algorithm()
 }
 
-type NoopSigner struct{}
-
-func (NoopSigner) Sign(context.Context, OfflineProfile) (*string, error) { return nil, nil }
+// VerifyProfile checks a profile against its detached signature.
+func (s *Service) VerifyProfile(profile OfflineProfile, signatureB64 string) bool {
+	return s.signer.Verify(profile, signatureB64)
+}
 
 type CreateTenantRequest struct {
 	Name    string              `json:"name"`
@@ -121,6 +132,19 @@ type CreateUserRequest struct {
 	Embeddings []domain.Embedding   `json:"embeddings"`
 }
 
+// UpdateUserRequest is a superset of CreateUserRequest that additionally allows
+// toggling the user Status (e.g. reactivating a soft-deleted user).
+type UpdateUserRequest struct {
+	EmployeeID string               `json:"employeeId"`
+	Username   string               `json:"username"`
+	Password   string               `json:"password"`
+	Name       string               `json:"name"`
+	Role       string               `json:"role"`
+	Status     string               `json:"status"`
+	Configs    *domain.TenantConfig `json:"configs"`
+	Embeddings []domain.Embedding   `json:"embeddings"`
+}
+
 func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUserRequest) (domain.User, error) {
 	tenant, err := s.GetTenant(ctx, tenantID)
 	if err != nil {
@@ -144,13 +168,17 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 	if err := ValidateEmbeddings(req.Embeddings, req.Configs.ModelConfig.EmbeddingDimension); err != nil {
 		return domain.User{}, err
 	}
+	hashedPassword, err := hashPassword(req.Password)
+	if err != nil {
+		return domain.User{}, err
+	}
 	now := time.Now().UTC()
 	user := domain.User{
 		ID:         uuid.NewString(),
 		TenantID:   tenantID,
 		EmployeeID: req.EmployeeID,
 		Username:   req.Username,
-		Password:   req.Password,
+		Password:   hashedPassword,
 		Name:       req.Name,
 		Role:       req.Role,
 		Status:     domain.StatusActive,
@@ -193,7 +221,7 @@ func (s *Service) GetUser(ctx context.Context, tenantID, userID string) (domain.
 	return user, err
 }
 
-func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req CreateUserRequest) (domain.User, error) {
+func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req UpdateUserRequest) (domain.User, error) {
 	user, err := s.GetUser(ctx, tenantID, userID)
 	if err != nil {
 		return domain.User{}, err
@@ -205,13 +233,23 @@ func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req C
 		user.Username = req.Username
 	}
 	if strings.TrimSpace(req.Password) != "" {
-		user.Password = req.Password
+		hashed, err := hashPassword(req.Password)
+		if err != nil {
+			return domain.User{}, err
+		}
+		user.Password = hashed
 	}
 	if strings.TrimSpace(req.Name) != "" {
 		user.Name = req.Name
 	}
 	if req.Role != "" {
 		user.Role = req.Role
+	}
+	if req.Status != "" {
+		if req.Status != domain.StatusActive && req.Status != domain.StatusInactive {
+			return domain.User{}, BadRequest("status must be ACTIVE or INACTIVE")
+		}
+		user.Status = req.Status
 	}
 	if req.Configs != nil {
 		if err := ValidateTenantConfig(*req.Configs); err != nil {
@@ -275,7 +313,7 @@ func (s *Service) Login(ctx context.Context, tenantID string, req LoginRequest) 
 	if err != nil {
 		return LoginResponse{}, err
 	}
-	if user.Password != req.Password {
+	if !verifyPassword(user.Password, req.Password) {
 		return LoginResponse{}, Conflict("invalid username or password")
 	}
 	if user.Status != domain.StatusActive {
