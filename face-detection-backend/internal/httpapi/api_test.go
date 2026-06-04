@@ -55,27 +55,31 @@ func decode[T any](t *testing.T, rec *httptest.ResponseRecorder) T {
 	return value
 }
 
-func validTenantReq(name string, dimension int) map[string]any {
+func validConfig(dimension int) map[string]any {
 	return map[string]any{
-		"name": name,
-		"configs": map[string]any{
-			"MODEL_CONFIG": map[string]any{
-				"modelVersion":       "facenet-v1",
-				"faceThreshold":      0.82,
-				"livenessThreshold":  0.77,
-				"embeddingDimension": dimension,
-				"modelChecksum":      "sha256:demo",
-				"active":             true,
-			},
-			"LIVENESS_CONFIG": map[string]any{
-				"challengeTypes": []string{"BLINK", "SMILE"},
-				"active":         true,
-			},
+		"MODEL_CONFIG": map[string]any{
+			"modelVersion":       "facenet-v1",
+			"faceThreshold":      0.82,
+			"livenessThreshold":  0.77,
+			"embeddingDimension": dimension,
+			"modelChecksum":      "sha256:demo",
+			"active":             true,
+		},
+		"LIVENESS_CONFIG": map[string]any{
+			"challengeTypes": []string{"BLINK", "SMILE"},
+			"active":         true,
 		},
 	}
 }
 
-func validUserReq(employeeID string, embeddings [][]float64) map[string]any {
+func validTenantReq(name string, dimension int) map[string]any {
+	return map[string]any{
+		"name":    name,
+		"configs": validConfig(dimension),
+	}
+}
+
+func validUserReqWithDimension(employeeID string, embeddings [][]float64, dimension int) map[string]any {
 	items := []map[string]any{}
 	for i, vector := range embeddings {
 		items = append(items, map[string]any{"id": "emb-" + string(rune('a'+i)), "vector": vector})
@@ -86,8 +90,13 @@ func validUserReq(employeeID string, embeddings [][]float64) map[string]any {
 		"password":   "pass-" + employeeID,
 		"name":       "Asha Rao",
 		"role":       "Security",
+		"configs":    validConfig(dimension),
 		"embeddings": items,
 	}
+}
+
+func validUserReq(employeeID string, embeddings [][]float64) map[string]any {
+	return validUserReqWithDimension(employeeID, embeddings, 3)
 }
 
 func createTenant(t *testing.T, app *testApp, name string, dimension int) domain.Tenant {
@@ -170,7 +179,7 @@ func TestTenantAPIs(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
-	t.Run("TC-TENANT-005 update tenant config and profile uses update", func(t *testing.T) {
+	t.Run("TC-TENANT-005 update tenant config does not alter user profile config snapshot", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, _, client := seedActiveFlow(t, app)
 		req := validTenantReq("Acme Updated", 3)
@@ -180,7 +189,7 @@ func TestTenantAPIs(t *testing.T) {
 		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusOK, profileRec.Code, profileRec.Body.String())
 		profile := decode[service.OfflineProfile](t, profileRec)
-		require.Equal(t, 0.91, profile.ModelConfig.FaceThreshold)
+		require.Equal(t, 0.82, profile.ModelConfig.FaceThreshold)
 	})
 
 	t.Run("TC-TENANT-006 and TC-TENANT-007 soft-delete blocks profile", func(t *testing.T) {
@@ -201,10 +210,20 @@ func TestUserAPIs(t *testing.T) {
 		tenant := createTenant(t, app, "Acme", 3)
 		user := createUser(t, app, tenant.ID, "E-100")
 		require.Equal(t, tenant.ID, user.TenantID)
+		require.Equal(t, 3, user.Configs.ModelConfig.EmbeddingDimension)
 		require.Len(t, user.Embeddings, 2)
 	})
 
-	t.Run("TC-USER-002 duplicate employee id inside same tenant", func(t *testing.T) {
+	t.Run("TC-USER-002 missing user config", func(t *testing.T) {
+		app := newTestApp(t)
+		tenant := createTenant(t, app, "Acme", 3)
+		req := validUserReq("E-100", [][]float64{{0.1, 0.2, 0.3}})
+		delete(req, "configs")
+		rec := app.requestWithTenant(http.MethodPost, "/api/users", tenant.ID, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	})
+
+	t.Run("TC-USER-003 duplicate employee id inside same tenant", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant := createTenant(t, app, "Acme", 3)
 		_ = createUser(t, app, tenant.ID, "E-100")
@@ -212,7 +231,7 @@ func TestUserAPIs(t *testing.T) {
 		require.Equal(t, http.StatusConflict, rec.Code)
 	})
 
-	t.Run("TC-USER-003 same employee id across tenants", func(t *testing.T) {
+	t.Run("TC-USER-004 same employee id across tenants", func(t *testing.T) {
 		app := newTestApp(t)
 		t1 := createTenant(t, app, "Acme", 3)
 		t2 := createTenant(t, app, "Beta", 3)
@@ -221,14 +240,14 @@ func TestUserAPIs(t *testing.T) {
 		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	})
 
-	t.Run("TC-USER-004 embedding dimension mismatch", func(t *testing.T) {
+	t.Run("TC-USER-005 embedding dimension mismatch", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant := createTenant(t, app, "Acme", 3)
 		rec := app.requestWithTenant(http.MethodPost, "/api/users", tenant.ID, validUserReq("E-100", [][]float64{{0.1, 0.2}}))
 		require.Equal(t, http.StatusBadRequest, rec.Code)
 	})
 
-	t.Run("TC-USER-005 update embeddings reflected in profile", func(t *testing.T) {
+	t.Run("TC-USER-006 update embeddings reflected in profile", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, client := seedActiveFlow(t, app)
 		rec := app.requestWithTenant(http.MethodPut, "/api/users/"+user.ID, tenant.ID, validUserReq("E-100", [][]float64{{0.7, 0.8, 0.9}}))
@@ -239,7 +258,21 @@ func TestUserAPIs(t *testing.T) {
 		require.Equal(t, []float64{0.7, 0.8, 0.9}, profile.Embeddings[0].Vector)
 	})
 
-	t.Run("TC-USER-006 and TC-USER-007 soft-delete blocks profile", func(t *testing.T) {
+	t.Run("TC-USER-007 user config decouples profile from tenant config dimension", func(t *testing.T) {
+		app := newTestApp(t)
+		tenant := createTenant(t, app, "Acme", 2)
+		userReq := validUserReqWithDimension("E-100", [][]float64{{0.1, 0.2, 0.3}}, 3)
+		rec := app.requestWithTenant(http.MethodPost, "/api/users", tenant.ID, userReq)
+		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		user := decode[domain.User](t, rec)
+		client := createClient(t, app, tenant.ID, user.ID)
+		profileRec := app.requestWithTenant(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", tenant.ID, nil)
+		require.Equal(t, http.StatusOK, profileRec.Code, profileRec.Body.String())
+		profile := decode[service.OfflineProfile](t, profileRec)
+		require.Equal(t, 3, profile.ModelConfig.EmbeddingDimension)
+	})
+
+	t.Run("TC-USER-008 and TC-USER-009 soft-delete blocks profile", func(t *testing.T) {
 		app := newTestApp(t)
 		tenant, user, client := seedActiveFlow(t, app)
 		rec := app.requestWithTenant(http.MethodDelete, "/api/users/"+user.ID, tenant.ID, nil)

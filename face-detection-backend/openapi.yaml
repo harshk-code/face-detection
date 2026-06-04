@@ -742,6 +742,7 @@ components:
       - username
       - password
       - name
+      - configs
       - embeddings
       properties:
         employeeId:
@@ -757,6 +758,8 @@ components:
           type: string
         role:
           type: string
+        configs:
+          "$ref": "#/components/schemas/TenantConfig"
         embeddings:
           type: array
           items:
@@ -781,6 +784,8 @@ components:
           enum:
           - ACTIVE
           - INACTIVE
+        configs:
+          "$ref": "#/components/schemas/TenantConfig"
         embeddings:
           type: array
           items:

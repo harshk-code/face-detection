@@ -112,12 +112,13 @@ func (s *Service) DeleteTenant(ctx context.Context, tenantID string) (domain.Ten
 }
 
 type CreateUserRequest struct {
-	EmployeeID string             `json:"employeeId"`
-	Username   string             `json:"username"`
-	Password   string             `json:"password"`
-	Name       string             `json:"name"`
-	Role       string             `json:"role"`
-	Embeddings []domain.Embedding `json:"embeddings"`
+	EmployeeID string               `json:"employeeId"`
+	Username   string               `json:"username"`
+	Password   string               `json:"password"`
+	Name       string               `json:"name"`
+	Role       string               `json:"role"`
+	Configs    *domain.TenantConfig `json:"configs"`
+	Embeddings []domain.Embedding   `json:"embeddings"`
 }
 
 func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUserRequest) (domain.User, error) {
@@ -134,7 +135,13 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
 		return domain.User{}, BadRequest("username and password are required")
 	}
-	if err := ValidateEmbeddings(req.Embeddings, tenant.Configs.ModelConfig.EmbeddingDimension); err != nil {
+	if req.Configs == nil {
+		return domain.User{}, BadRequest("configs is required")
+	}
+	if err := ValidateTenantConfig(*req.Configs); err != nil {
+		return domain.User{}, err
+	}
+	if err := ValidateEmbeddings(req.Embeddings, req.Configs.ModelConfig.EmbeddingDimension); err != nil {
 		return domain.User{}, err
 	}
 	now := time.Now().UTC()
@@ -147,6 +154,7 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 		Name:       req.Name,
 		Role:       req.Role,
 		Status:     domain.StatusActive,
+		Configs:    *req.Configs,
 		Embeddings: normalizeEmbeddingIDs(req.Embeddings),
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -186,10 +194,6 @@ func (s *Service) GetUser(ctx context.Context, tenantID, userID string) (domain.
 }
 
 func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req CreateUserRequest) (domain.User, error) {
-	tenant, err := s.GetTenant(ctx, tenantID)
-	if err != nil {
-		return domain.User{}, err
-	}
 	user, err := s.GetUser(ctx, tenantID, userID)
 	if err != nil {
 		return domain.User{}, err
@@ -209,8 +213,17 @@ func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req C
 	if req.Role != "" {
 		user.Role = req.Role
 	}
+	if req.Configs != nil {
+		if err := ValidateTenantConfig(*req.Configs); err != nil {
+			return domain.User{}, err
+		}
+		user.Configs = *req.Configs
+	}
 	if req.Embeddings != nil {
-		if err := ValidateEmbeddings(req.Embeddings, tenant.Configs.ModelConfig.EmbeddingDimension); err != nil {
+		if err := ValidateTenantConfig(user.Configs); err != nil {
+			return domain.User{}, Conflict("user config is missing or invalid")
+		}
+		if err := ValidateEmbeddings(req.Embeddings, user.Configs.ModelConfig.EmbeddingDimension); err != nil {
 			return domain.User{}, err
 		}
 		user.Embeddings = normalizeEmbeddingIDs(req.Embeddings)
@@ -494,14 +507,17 @@ func (s *Service) OfflineProfile(ctx context.Context, tenantID, clientID string)
 	if err != nil {
 		return OfflineProfile{}, err
 	}
+	if err := ValidateTenantConfig(resolved.User.Configs); err != nil {
+		return OfflineProfile{}, Conflict("user config is missing or invalid")
+	}
 	profile := OfflineProfile{
 		ClientID:       resolved.Client.ClientID,
 		TenantID:       resolved.Tenant.ID,
 		UserID:         resolved.User.ID,
 		EmployeeID:     resolved.User.EmployeeID,
 		UserName:       resolved.User.Name,
-		ModelConfig:    resolved.Tenant.Configs.ModelConfig,
-		LivenessConfig: resolved.Tenant.Configs.LivenessConfig,
+		ModelConfig:    resolved.User.Configs.ModelConfig,
+		LivenessConfig: resolved.User.Configs.LivenessConfig,
 		Embeddings:     resolved.User.Embeddings,
 		ValidUntil:     time.Now().UTC().Add(24 * time.Hour),
 	}
@@ -598,7 +614,10 @@ func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEv
 	if event.CapturedAt.IsZero() {
 		return "capturedAt is required"
 	}
-	if err := ValidateEventEmbedding(event.Embedding, resolved.Tenant.Configs.ModelConfig.EmbeddingDimension); err != nil {
+	if err := ValidateTenantConfig(resolved.User.Configs); err != nil {
+		return "user config is missing or invalid"
+	}
+	if err := ValidateEventEmbedding(event.Embedding, resolved.User.Configs.ModelConfig.EmbeddingDimension); err != nil {
 		return err.Error()
 	}
 	if resolved.Client.Status == domain.StatusInactive && resolved.Client.DeactivatedAt != nil && !event.CapturedAt.Before(*resolved.Client.DeactivatedAt) {
