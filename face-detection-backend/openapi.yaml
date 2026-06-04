@@ -288,6 +288,32 @@ paths:
             application/json:
               schema:
                 "$ref": "#/components/schemas/PurgeAckResponse"
+  "/api/offline/onboarding-sync":
+    parameters:
+    - "$ref": "#/components/parameters/TenantHeader"
+    post:
+      tags:
+      - Runtime
+      summary: Sync offline user enrollments and their auth events
+      description: Creates backend users and clients from phone-local enrollments,
+        then stores linked offline auth events after resolving localEnrollmentId.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/OfflineOnboardingSyncRequest"
+      responses:
+        '200':
+          description: Offline onboarding sync result
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/OfflineOnboardingSyncResponse"
+        '400':
+          "$ref": "#/components/responses/ValidationError"
+        '409':
+          "$ref": "#/components/responses/Conflict"
   "/api/admin/tenants":
     get:
       tags:
@@ -742,6 +768,7 @@ components:
       - username
       - password
       - name
+      - configs
       - embeddings
       properties:
         employeeId:
@@ -757,6 +784,8 @@ components:
           type: string
         role:
           type: string
+        configs:
+          "$ref": "#/components/schemas/TenantConfig"
         embeddings:
           type: array
           items:
@@ -781,6 +810,8 @@ components:
           enum:
           - ACTIVE
           - INACTIVE
+        configs:
+          "$ref": "#/components/schemas/TenantConfig"
         embeddings:
           type: array
           items:
@@ -993,6 +1024,110 @@ components:
             type: object
             properties:
               eventId:
+                type: string
+              reason:
+                type: string
+    OfflineOnboardingSyncRequest:
+      type: object
+      required:
+      - device
+      - enrollments
+      properties:
+        device:
+          "$ref": "#/components/schemas/OfflineSyncDevice"
+        enrollments:
+          type: array
+          items:
+            "$ref": "#/components/schemas/OfflineEnrollment"
+        events:
+          type: array
+          maxItems: 100
+          items:
+            "$ref": "#/components/schemas/OfflineSyncEvent"
+    OfflineSyncDevice:
+      type: object
+      required:
+      - deviceType
+      - deviceName
+      - platform
+      - appVersion
+      properties:
+        deviceType:
+          type: string
+          example: PHONE
+        deviceName:
+          type: string
+          example: Pixel 9
+        platform:
+          type: string
+          example: ANDROID
+        appVersion:
+          type: string
+          example: 1.0.0
+        imei:
+          type: string
+    OfflineEnrollment:
+      allOf:
+      - "$ref": "#/components/schemas/CreateUserRequest"
+      - type: object
+        required:
+        - localEnrollmentId
+        properties:
+          localEnrollmentId:
+            type: string
+            example: local-001
+    OfflineSyncEvent:
+      allOf:
+      - "$ref": "#/components/schemas/SyncEvent"
+      - type: object
+        required:
+        - localEnrollmentId
+        properties:
+          localEnrollmentId:
+            type: string
+            example: local-001
+    OfflineOnboardingSyncResponse:
+      type: object
+      properties:
+        enrollments:
+          type: array
+          items:
+            type: object
+            properties:
+              localEnrollmentId:
+                type: string
+              userId:
+                type: string
+              clientId:
+                type: string
+              status:
+                type: string
+                example: SYNCED
+        acceptedEventIds:
+          type: array
+          items:
+            type: string
+        duplicateEventIds:
+          type: array
+          items:
+            type: string
+        rejectedEvents:
+          type: array
+          items:
+            type: object
+            properties:
+              localEnrollmentId:
+                type: string
+              eventId:
+                type: string
+              reason:
+                type: string
+        rejectedEnrollments:
+          type: array
+          items:
+            type: object
+            properties:
+              localEnrollmentId:
                 type: string
               reason:
                 type: string

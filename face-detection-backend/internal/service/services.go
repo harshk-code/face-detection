@@ -112,12 +112,13 @@ func (s *Service) DeleteTenant(ctx context.Context, tenantID string) (domain.Ten
 }
 
 type CreateUserRequest struct {
-	EmployeeID string             `json:"employeeId"`
-	Username   string             `json:"username"`
-	Password   string             `json:"password"`
-	Name       string             `json:"name"`
-	Role       string             `json:"role"`
-	Embeddings []domain.Embedding `json:"embeddings"`
+	EmployeeID string               `json:"employeeId"`
+	Username   string               `json:"username"`
+	Password   string               `json:"password"`
+	Name       string               `json:"name"`
+	Role       string               `json:"role"`
+	Configs    *domain.TenantConfig `json:"configs"`
+	Embeddings []domain.Embedding   `json:"embeddings"`
 }
 
 func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUserRequest) (domain.User, error) {
@@ -134,7 +135,13 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
 		return domain.User{}, BadRequest("username and password are required")
 	}
-	if err := ValidateEmbeddings(req.Embeddings, tenant.Configs.ModelConfig.EmbeddingDimension); err != nil {
+	if req.Configs == nil {
+		return domain.User{}, BadRequest("configs is required")
+	}
+	if err := ValidateTenantConfig(*req.Configs); err != nil {
+		return domain.User{}, err
+	}
+	if err := ValidateEmbeddings(req.Embeddings, req.Configs.ModelConfig.EmbeddingDimension); err != nil {
 		return domain.User{}, err
 	}
 	now := time.Now().UTC()
@@ -147,6 +154,7 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 		Name:       req.Name,
 		Role:       req.Role,
 		Status:     domain.StatusActive,
+		Configs:    *req.Configs,
 		Embeddings: normalizeEmbeddingIDs(req.Embeddings),
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -186,10 +194,6 @@ func (s *Service) GetUser(ctx context.Context, tenantID, userID string) (domain.
 }
 
 func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req CreateUserRequest) (domain.User, error) {
-	tenant, err := s.GetTenant(ctx, tenantID)
-	if err != nil {
-		return domain.User{}, err
-	}
 	user, err := s.GetUser(ctx, tenantID, userID)
 	if err != nil {
 		return domain.User{}, err
@@ -209,8 +213,17 @@ func (s *Service) UpdateUser(ctx context.Context, tenantID, userID string, req C
 	if req.Role != "" {
 		user.Role = req.Role
 	}
+	if req.Configs != nil {
+		if err := ValidateTenantConfig(*req.Configs); err != nil {
+			return domain.User{}, err
+		}
+		user.Configs = *req.Configs
+	}
 	if req.Embeddings != nil {
-		if err := ValidateEmbeddings(req.Embeddings, tenant.Configs.ModelConfig.EmbeddingDimension); err != nil {
+		if err := ValidateTenantConfig(user.Configs); err != nil {
+			return domain.User{}, Conflict("user config is missing or invalid")
+		}
+		if err := ValidateEmbeddings(req.Embeddings, user.Configs.ModelConfig.EmbeddingDimension); err != nil {
 			return domain.User{}, err
 		}
 		user.Embeddings = normalizeEmbeddingIDs(req.Embeddings)
@@ -494,14 +507,17 @@ func (s *Service) OfflineProfile(ctx context.Context, tenantID, clientID string)
 	if err != nil {
 		return OfflineProfile{}, err
 	}
+	if err := ValidateTenantConfig(resolved.User.Configs); err != nil {
+		return OfflineProfile{}, Conflict("user config is missing or invalid")
+	}
 	profile := OfflineProfile{
 		ClientID:       resolved.Client.ClientID,
 		TenantID:       resolved.Tenant.ID,
 		UserID:         resolved.User.ID,
 		EmployeeID:     resolved.User.EmployeeID,
 		UserName:       resolved.User.Name,
-		ModelConfig:    resolved.Tenant.Configs.ModelConfig,
-		LivenessConfig: resolved.Tenant.Configs.LivenessConfig,
+		ModelConfig:    resolved.User.Configs.ModelConfig,
+		LivenessConfig: resolved.User.Configs.LivenessConfig,
 		Embeddings:     resolved.User.Embeddings,
 		ValidUntil:     time.Now().UTC().Add(24 * time.Hour),
 	}
@@ -588,6 +604,246 @@ func (s *Service) SyncEvents(ctx context.Context, tenantID, clientID string, req
 	return response, nil
 }
 
+type OfflineOnboardingSyncRequest struct {
+	Device      OfflineSyncDevice        `json:"device"`
+	Enrollments []OfflineEnrollmentInput `json:"enrollments"`
+	Events      []OfflineSyncEventInput  `json:"events"`
+}
+
+type OfflineSyncDevice struct {
+	DeviceType string `json:"deviceType"`
+	DeviceName string `json:"deviceName"`
+	Platform   string `json:"platform"`
+	AppVersion string `json:"appVersion"`
+	IMEI       string `json:"imei"`
+}
+
+type OfflineEnrollmentInput struct {
+	LocalEnrollmentID string               `json:"localEnrollmentId"`
+	EmployeeID        string               `json:"employeeId"`
+	Username          string               `json:"username"`
+	Password          string               `json:"password"`
+	Name              string               `json:"name"`
+	Role              string               `json:"role"`
+	Configs           *domain.TenantConfig `json:"configs"`
+	Embeddings        []domain.Embedding   `json:"embeddings"`
+}
+
+type OfflineSyncEventInput struct {
+	LocalEnrollmentID string    `json:"localEnrollmentId"`
+	EventID           string    `json:"eventId"`
+	Result            string    `json:"result"`
+	FailureReason     string    `json:"failureReason"`
+	FaceScore         float64   `json:"faceScore"`
+	LivenessScore     float64   `json:"livenessScore"`
+	ChallengeTypes    []string  `json:"challengeTypes"`
+	LatencyMs         int       `json:"latencyMs"`
+	Embedding         []float64 `json:"embedding"`
+	CapturedAt        time.Time `json:"capturedAt"`
+}
+
+type SyncedOfflineEnrollment struct {
+	LocalEnrollmentID string `json:"localEnrollmentId"`
+	UserID            string `json:"userId"`
+	ClientID          string `json:"clientId"`
+	Status            string `json:"status"`
+}
+
+type RejectedEnrollment struct {
+	LocalEnrollmentID string `json:"localEnrollmentId"`
+	Reason            string `json:"reason"`
+}
+
+type RejectedOfflineEvent struct {
+	LocalEnrollmentID string `json:"localEnrollmentId"`
+	EventID           string `json:"eventId"`
+	Reason            string `json:"reason"`
+}
+
+type OfflineOnboardingSyncResponse struct {
+	Enrollments         []SyncedOfflineEnrollment `json:"enrollments"`
+	AcceptedEventIDs    []string                  `json:"acceptedEventIds"`
+	DuplicateEventIDs   []string                  `json:"duplicateEventIds"`
+	RejectedEvents      []RejectedOfflineEvent    `json:"rejectedEvents"`
+	RejectedEnrollments []RejectedEnrollment      `json:"rejectedEnrollments"`
+}
+
+func (s *Service) OfflineOnboardingSync(ctx context.Context, tenantID string, req OfflineOnboardingSyncRequest) (OfflineOnboardingSyncResponse, error) {
+	if len(req.Enrollments) == 0 {
+		return OfflineOnboardingSyncResponse{}, BadRequest("enrollments is required")
+	}
+	if len(req.Events) > 100 {
+		return OfflineOnboardingSyncResponse{}, BadRequest("events cannot exceed 100 per request")
+	}
+	if err := validateOfflineSyncDevice(req.Device); err != nil {
+		return OfflineOnboardingSyncResponse{}, err
+	}
+	tenant, err := s.GetTenant(ctx, tenantID)
+	if err != nil {
+		return OfflineOnboardingSyncResponse{}, err
+	}
+	if tenant.Status != domain.StatusActive {
+		return OfflineOnboardingSyncResponse{}, Conflict("tenant is inactive")
+	}
+
+	response := OfflineOnboardingSyncResponse{
+		Enrollments:         []SyncedOfflineEnrollment{},
+		AcceptedEventIDs:    []string{},
+		DuplicateEventIDs:   []string{},
+		RejectedEvents:      []RejectedOfflineEvent{},
+		RejectedEnrollments: []RejectedEnrollment{},
+	}
+	resolvedByLocalID := map[string]ResolvedClientContext{}
+	rejectedEnrollmentReasons := map[string]string{}
+	seenLocalIDs := map[string]bool{}
+
+	for _, enrollment := range req.Enrollments {
+		localID := strings.TrimSpace(enrollment.LocalEnrollmentID)
+		if localID == "" {
+			response.RejectedEnrollments = append(response.RejectedEnrollments, RejectedEnrollment{
+				LocalEnrollmentID: enrollment.LocalEnrollmentID,
+				Reason:            "localEnrollmentId is required",
+			})
+			continue
+		}
+		if seenLocalIDs[localID] {
+			rejectedEnrollmentReasons[localID] = "duplicate localEnrollmentId"
+			response.RejectedEnrollments = append(response.RejectedEnrollments, RejectedEnrollment{
+				LocalEnrollmentID: localID,
+				Reason:            "duplicate localEnrollmentId",
+			})
+			continue
+		}
+		seenLocalIDs[localID] = true
+
+		user, err := s.CreateUser(ctx, tenantID, CreateUserRequest{
+			EmployeeID: enrollment.EmployeeID,
+			Username:   enrollment.Username,
+			Password:   enrollment.Password,
+			Name:       enrollment.Name,
+			Role:       enrollment.Role,
+			Configs:    enrollment.Configs,
+			Embeddings: enrollment.Embeddings,
+		})
+		if err != nil {
+			rejectedEnrollmentReasons[localID] = err.Error()
+			response.RejectedEnrollments = append(response.RejectedEnrollments, RejectedEnrollment{
+				LocalEnrollmentID: localID,
+				Reason:            err.Error(),
+			})
+			continue
+		}
+
+		client, err := s.CreateClient(ctx, CreateClientRequest{
+			TenantID:   tenantID,
+			UserID:     user.ID,
+			DeviceType: req.Device.DeviceType,
+			DeviceName: req.Device.DeviceName,
+			Platform:   req.Device.Platform,
+			AppVersion: req.Device.AppVersion,
+			IMEI:       req.Device.IMEI,
+		})
+		if err != nil {
+			rejectedEnrollmentReasons[localID] = err.Error()
+			response.RejectedEnrollments = append(response.RejectedEnrollments, RejectedEnrollment{
+				LocalEnrollmentID: localID,
+				Reason:            err.Error(),
+			})
+			continue
+		}
+
+		resolvedByLocalID[localID] = ResolvedClientContext{Tenant: tenant, User: user, Client: client}
+		response.Enrollments = append(response.Enrollments, SyncedOfflineEnrollment{
+			LocalEnrollmentID: localID,
+			UserID:            user.ID,
+			ClientID:          client.ClientID,
+			Status:            "SYNCED",
+		})
+	}
+
+	now := time.Now().UTC()
+	for _, event := range req.Events {
+		localID := strings.TrimSpace(event.LocalEnrollmentID)
+		if localID == "" {
+			response.RejectedEvents = append(response.RejectedEvents, RejectedOfflineEvent{
+				LocalEnrollmentID: event.LocalEnrollmentID,
+				EventID:           event.EventID,
+				Reason:            "localEnrollmentId is required",
+			})
+			continue
+		}
+		resolved, ok := resolvedByLocalID[localID]
+		if !ok {
+			reason := rejectedEnrollmentReasons[localID]
+			if reason == "" {
+				reason = "localEnrollmentId was not synced"
+			}
+			response.RejectedEvents = append(response.RejectedEvents, RejectedOfflineEvent{
+				LocalEnrollmentID: localID,
+				EventID:           event.EventID,
+				Reason:            reason,
+			})
+			continue
+		}
+
+		input := SyncEventInput{
+			EventID:        event.EventID,
+			Result:         event.Result,
+			FailureReason:  event.FailureReason,
+			FaceScore:      event.FaceScore,
+			LivenessScore:  event.LivenessScore,
+			ChallengeTypes: event.ChallengeTypes,
+			LatencyMs:      event.LatencyMs,
+			Embedding:      event.Embedding,
+			CapturedAt:     event.CapturedAt,
+		}
+		if reason := s.validateSyncEvent(resolved, input); reason != "" {
+			response.RejectedEvents = append(response.RejectedEvents, RejectedOfflineEvent{
+				LocalEnrollmentID: localID,
+				EventID:           event.EventID,
+				Reason:            reason,
+			})
+			continue
+		}
+
+		authEvent := domain.AuthEvent{
+			ID:             uuid.NewString(),
+			TenantID:       resolved.Tenant.ID,
+			UserID:         resolved.User.ID,
+			ClientID:       resolved.Client.ClientID,
+			EventID:        input.EventID,
+			Result:         input.Result,
+			FailureReason:  input.FailureReason,
+			FaceScore:      input.FaceScore,
+			LivenessScore:  input.LivenessScore,
+			ChallengeTypes: input.ChallengeTypes,
+			LatencyMs:      input.LatencyMs,
+			Embedding:      input.Embedding,
+			CapturedAt:     input.CapturedAt,
+			ReceivedAt:     now,
+			PurgeStatus:    domain.PurgePending,
+		}
+		_, err := s.store.CreateAuthEvent(ctx, authEvent)
+		if errors.Is(err, store.ErrDuplicate) {
+			response.DuplicateEventIDs = append(response.DuplicateEventIDs, input.EventID)
+			continue
+		}
+		if err != nil {
+			return OfflineOnboardingSyncResponse{}, err
+		}
+		response.AcceptedEventIDs = append(response.AcceptedEventIDs, input.EventID)
+	}
+
+	return response, nil
+}
+
+func validateOfflineSyncDevice(device OfflineSyncDevice) error {
+	if strings.TrimSpace(device.DeviceType) == "" || strings.TrimSpace(device.DeviceName) == "" || strings.TrimSpace(device.Platform) == "" || strings.TrimSpace(device.AppVersion) == "" {
+		return BadRequest("deviceType, deviceName, platform, and appVersion are required")
+	}
+	return nil
+}
+
 func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEventInput) string {
 	if strings.TrimSpace(event.EventID) == "" {
 		return "eventId is required"
@@ -598,7 +854,10 @@ func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEv
 	if event.CapturedAt.IsZero() {
 		return "capturedAt is required"
 	}
-	if err := ValidateEventEmbedding(event.Embedding, resolved.Tenant.Configs.ModelConfig.EmbeddingDimension); err != nil {
+	if err := ValidateTenantConfig(resolved.User.Configs); err != nil {
+		return "user config is missing or invalid"
+	}
+	if err := ValidateEventEmbedding(event.Embedding, resolved.User.Configs.ModelConfig.EmbeddingDimension); err != nil {
 		return err.Error()
 	}
 	if resolved.Client.Status == domain.StatusInactive && resolved.Client.DeactivatedAt != nil && !event.CapturedAt.Before(*resolved.Client.DeactivatedAt) {

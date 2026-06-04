@@ -47,17 +47,18 @@ type LivenessConfig struct {
 }
 
 type User struct {
-	ID         string      `json:"id" bson:"_id"`
-	TenantID   string      `json:"tenantId" bson:"tenantId"`
-	EmployeeID string      `json:"employeeId" bson:"employeeId"`
-	Username   string      `json:"username" bson:"username"`
-	Password   string      `json:"-" bson:"password"`
-	Name       string      `json:"name" bson:"name"`
-	Role       string      `json:"role" bson:"role"`
-	Status     string      `json:"status" bson:"status"`
-	Embeddings []Embedding `json:"embeddings" bson:"embeddings"`
-	CreatedAt  time.Time   `json:"createdAt" bson:"createdAt"`
-	UpdatedAt  time.Time   `json:"updatedAt" bson:"updatedAt"`
+	ID         string       `json:"id" bson:"_id"`
+	TenantID   string       `json:"tenantId" bson:"tenantId"`
+	EmployeeID string       `json:"employeeId" bson:"employeeId"`
+	Username   string       `json:"username" bson:"username"`
+	Password   string       `json:"-" bson:"password"`
+	Name       string       `json:"name" bson:"name"`
+	Role       string       `json:"role" bson:"role"`
+	Status     string       `json:"status" bson:"status"`
+	Configs    TenantConfig `json:"configs" bson:"configs"`
+	Embeddings []Embedding  `json:"embeddings" bson:"embeddings"`
+	CreatedAt  time.Time    `json:"createdAt" bson:"createdAt"`
+	UpdatedAt  time.Time    `json:"updatedAt" bson:"updatedAt"`
 }
 
 type Embedding struct {

@@ -70,6 +70,7 @@ type User = {
   name: string;
   role: string;
   status: Status;
+  configs?: TenantConfig;
   embeddings: Embedding[];
   createdAt: string;
   updatedAt: string;
@@ -453,6 +454,7 @@ export function App() {
         username: userForm.username,
         name: userForm.name,
         role: userForm.role,
+        configs: userMode === "create" ? selectedTenant.configs : selectedUser?.configs ?? selectedTenant.configs,
         embeddings: parseEmbeddings(userForm.embeddings)
       };
       if (userMode === "create" || userForm.password.trim()) {
