@@ -8,7 +8,7 @@ Stage 1 must focus only on making the backend work with the app through simple A
 
 ## Solution
 
-Build a Go 1.24 backend using Gin and MongoDB.
+Build a Go 1.24 backend using Gin and a pluggable persistence store. The hackathon package defaults to local JSON file storage so it can run without Docker or MongoDB, while MongoDB remains available as an explicit runtime option.
 
 The mobile onboarding order is:
 
@@ -51,11 +51,12 @@ The backend will expose tenant, user, and client CRUD, offline profile generatio
 
 ## Implementation Decisions
 
-- Use Go 1.24 with Gin for HTTP routing and MongoDB for persistence.
+- Use Go 1.24 with Gin for HTTP routing.
+- Default persistence is JSON files for the hackathon/local flow; MongoDB can be enabled with `STORE_BACKEND=mongo`.
 - Do not use Java or Spring Boot.
 - Do not add authentication in Stage 1.
 - Do not perform face recognition or liveness detection in the backend.
-- Use Mongo document references by id only; do not use DBRef-style relationships.
+- Use id references only; do not use DBRef-style relationships in Mongo mode.
 - `clientId` is globally unique, opaque, backend-generated, and is the only identifier the app sends after device registration.
 - Tenant is created first and user is created under tenant.
 - Stage 1 login returns `tenantId` and `userId` to the app.

@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build the Stage 1 backend in the backend project using Go 1.24, Gin, and MongoDB.
+Build the Stage 1 backend in the backend project using Go 1.24, Gin, and pluggable persistence. The hackathon/local runtime uses JSON files by default; MongoDB is optional.
 
 Stage 1 goal: working backend APIs for tenant, user, client onboarding, offline profile generation, bulk sync, purge acknowledgement, and admin/demo views. No auth in Stage 1. Stage 2 will add JWT everywhere.
 
@@ -16,7 +16,7 @@ Build:
 
 - Go module targeting Go 1.24.
 - Gin HTTP server.
-- MongoDB connection setup.
+- File-store setup and optional MongoDB connection setup.
 - Environment config loading.
 - Health endpoint.
 - Shared response/error format.
@@ -31,7 +31,7 @@ Build:
 Required dependencies:
 
 - Gin.
-- MongoDB Go driver.
+- MongoDB Go driver for optional Mongo-backed runs.
 - Validator package.
 - UUID package.
 - Test/assertion package.
@@ -39,11 +39,11 @@ Required dependencies:
 Acceptance:
 
 - `GET /health` returns success.
-- App starts with Mongo URI from env.
+- App starts without requiring MongoDB by default.
 - Tests can run without requiring production Mongo config.
 - No auth middleware exists.
 
-## Agent 2: Domain Models And Mongo Repositories
+## Agent 2: Domain Models And Store Repositories
 
 Goal: Implement persistence models and repository methods.
 
