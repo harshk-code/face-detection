@@ -1,15 +1,11 @@
 import {Platform} from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 
+import {getApiBaseUrl} from './apiBaseUrlStore';
 import {FACE_AUTH_CONFIG} from './modelConfig';
 import type {FaceTemplate} from './types';
 import {logError, logInfo} from '../utils/logError';
 
-// Dev builds talk to the local Go backend (reach it from the device with
-// `adb reverse tcp:18081 tcp:18081`); release builds use the staging gateway.
-const API_BASE_URL = __DEV__
-  ? 'http://localhost:18081/'
-  : 'https://c24-bff-service-stage.qac24svc.dev/';
 const TENANT_ID = 'Cars24';
 
 type UserOnboardingResponse = {
@@ -40,7 +36,7 @@ export type BackendAuthEventPayload = {
     type: string;
   };
   modelVersion: string;
-  result: 'SUCCESS' | 'FAILED';
+  result: 'SUCCESS';
   threshold: number;
   userId: string | null;
 };
@@ -173,9 +169,11 @@ export async function postPurgeAck(
 }
 
 async function postJson<ResponseBody>(path: string, body: unknown) {
-  const url = `${API_BASE_URL.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+  const apiBaseUrl = await getApiBaseUrl();
+  const url = `${apiBaseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
 
   logInfo('backend:request', {
+    baseUrl: apiBaseUrl,
     path,
     url,
   });

@@ -2,6 +2,7 @@ import type {ComponentType} from 'react';
 import type {NativeStackNavigationOptions} from '@react-navigation/native-stack';
 
 import {
+  ApiSettingsRoute,
   BenchmarkRoute,
   HomeRoute,
   IntroRoute,
@@ -38,6 +39,10 @@ const DEV_SCREENS_CONFIG: RootScreenConfigItem[] = __DEV__
   : [];
 
 export const ROOT_SCREENS_CONFIG: RootScreenConfigItem[] = [
+  {
+    name: Screens.ApiSettings,
+    component: ApiSettingsRoute,
+  },
   {
     name: Screens.Intro,
     component: IntroRoute,

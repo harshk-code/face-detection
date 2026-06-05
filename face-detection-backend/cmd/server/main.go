@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,24 +23,24 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	mongoStore, err := store.NewMongoStore(ctx, cfg.MongoURI, cfg.MongoDatabase)
+	appStore, closeStore, err := newStore(ctx, cfg)
 	if err != nil {
-		log.Fatalf("connect mongo: %v", err)
+		log.Fatalf("initialize store: %v", err)
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = mongoStore.Close(ctx)
+		_ = closeStore(ctx)
 	}()
 
-	if err := mongoStore.EnsureIndexes(ctx); err != nil {
-		log.Fatalf("ensure mongo indexes: %v", err)
+	if err := appStore.EnsureIndexes(ctx); err != nil {
+		log.Fatalf("ensure store indexes: %v", err)
 	}
-	if err := service.New(mongoStore).EnsureDefaultTenant(ctx); err != nil {
+	if err := service.New(appStore).EnsureDefaultTenant(ctx); err != nil {
 		log.Fatalf("ensure default tenant: %v", err)
 	}
 
-	router := httpapi.NewRouter(mongoStore)
+	router := httpapi.NewRouter(appStore)
 	server := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           router,
@@ -60,5 +62,26 @@ func main() {
 	defer shutdownCancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown: %v", err)
+	}
+}
+
+func newStore(ctx context.Context, cfg config.Config) (store.Store, func(context.Context) error, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.StoreBackend)) {
+	case "", "file", "json":
+		fileStore, err := store.NewFileStore(cfg.FileStoreDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf("using file store in %s", cfg.FileStoreDir)
+		return fileStore, func(context.Context) error { return nil }, nil
+	case "mongo", "mongodb":
+		mongoStore, err := store.NewMongoStore(ctx, cfg.MongoURI, cfg.MongoDatabase)
+		if err != nil {
+			return nil, nil, err
+		}
+		log.Printf("using mongo store database %s", cfg.MongoDatabase)
+		return mongoStore, mongoStore.Close, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported STORE_BACKEND %q", cfg.StoreBackend)
 	}
 }

@@ -2,7 +2,7 @@
 
 ## Backend Overview
 
-Build the backend in Go 1.24 using Gin and MongoDB.
+Build the backend in Go 1.24 using Gin and a pluggable persistence store. The hackathon/default runtime uses JSON files; MongoDB remains available for deployments that set `STORE_BACKEND=mongo`.
 
 The backend owns:
 
@@ -36,7 +36,9 @@ The backend does not own:
 10. App sends only `clientId` for post-registration runtime APIs.
 11. Backend resolves tenant and user from `clientId`.
 
-## Mongo Collections
+## Storage Collections
+
+In file mode, each collection is stored as a JSON file in `FILE_STORE_DIR`. In Mongo mode, the same logical collections map to MongoDB collections.
 
 ### tenants
 

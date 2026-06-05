@@ -5,7 +5,7 @@
 - Test external behavior and contracts, not implementation details.
 - Prefer service-level tests for domain rules and handler-level tests for API contracts.
 - The client resolver is the most important deep module and must be tested directly.
-- Mongo repository behavior should be tested around uniqueness, soft delete, and idempotency.
+- Store behavior should be tested around uniqueness, persistence, soft delete, and idempotency.
 - Stage 1 has no auth tests because auth is out of scope.
 
 ## Tenant Tests

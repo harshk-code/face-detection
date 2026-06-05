@@ -1,10 +1,13 @@
 import {NativeModules} from 'react-native';
 
 type NativeFaceTemplateStore = {
+  clearApiBaseUrl?: () => Promise<boolean>;
   clearSyncQueue: () => Promise<boolean>;
   clearTemplate: () => Promise<boolean>;
+  getApiBaseUrl?: () => Promise<string | null>;
   getSyncQueue: () => Promise<string | null>;
   getTemplate: () => Promise<string | null>;
+  saveApiBaseUrl?: (baseUrl: string) => Promise<boolean>;
   saveSyncQueue: (queueJson: string) => Promise<boolean>;
   saveTemplate: (templateJson: string) => Promise<boolean>;
 };
@@ -61,5 +64,31 @@ export async function clearNativeSyncQueue() {
   }
 
   await FaceTemplateStore.clearSyncQueue();
+  return true;
+}
+
+export async function getNativeApiBaseUrl() {
+  if (!FaceTemplateStore?.getApiBaseUrl) {
+    return null;
+  }
+
+  return FaceTemplateStore.getApiBaseUrl();
+}
+
+export async function saveNativeApiBaseUrl(baseUrl: string) {
+  if (!FaceTemplateStore?.saveApiBaseUrl) {
+    return false;
+  }
+
+  await FaceTemplateStore.saveApiBaseUrl(baseUrl);
+  return true;
+}
+
+export async function clearNativeApiBaseUrl() {
+  if (!FaceTemplateStore?.clearApiBaseUrl) {
+    return false;
+  }
+
+  await FaceTemplateStore.clearApiBaseUrl();
   return true;
 }

@@ -27,6 +27,15 @@ async function enqueueAuthEvent({
   template,
 }: AuthEventInput) {
   try {
+    if (!matchResult.matched) {
+      logInfo('sync-queue:auth-event:skip-failed', {
+        score: Number(matchResult.score.toFixed(6)),
+        templateId: template.templateId,
+        threshold: matchResult.threshold,
+      });
+      return;
+    }
+
     const eventId = createEventId(template);
     await enqueueAuthEventJob({
       event: {
@@ -39,7 +48,7 @@ async function enqueueAuthEvent({
           type: 'FACE_PRESENT',
         },
         modelVersion: template.modelVersion,
-        result: matchResult.matched ? 'SUCCESS' : 'FAILED',
+        result: 'SUCCESS',
         threshold: matchResult.threshold,
         userId: template.backendUserId ?? null,
       },
@@ -47,7 +56,7 @@ async function enqueueAuthEvent({
     });
     logInfo('sync-queue:auth-event:queued', {
       eventId,
-      result: matchResult.matched ? 'SUCCESS' : 'FAILED',
+      result: 'SUCCESS',
       templateId: template.templateId,
     });
     void processSyncQueue('auth-event-enqueued');
