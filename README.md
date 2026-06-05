@@ -13,6 +13,23 @@ The mobile app is focused on the hackathon problem statement:
 
 The app currently uses a real on-device face pipeline. It does not mock embeddings or matching.
 
+## For evaluators — start here
+
+- **App brand vs. package id:** the app is branded **Netra**; the Android package and
+  iOS target are `com.morthhackathon` / `MorthHackathon` (the original project codename,
+  kept to avoid a risky build-config rename late in the project). Same app.
+- **Building from the uploaded `.zip`:** the submission zip keeps a **single copy** of the
+  model files (`app/src/assets/models/`) to fit the 25 MB upload cap. For a full Android/iOS
+  build, **clone the repo** (it carries the per-platform model copies) instead of building
+  from the zip alone — or copy the two model files into
+  `app/android/app/src/main/assets/models/` and `app/ios/MorthHackathon/Models/`.
+  Repo: <https://github.com/harshk-code/face-detection>
+- **Platform status:** Android is **verified on a physical device** (Samsung SM-F956B,
+  Android 16). The iOS native code is complete but **building it requires a Mac with full Xcode**.
+- **Fastest tour:** slides → `docs/presentation/deck.pdf` · run it → `SETUP_GUIDE.md` ·
+  integrate into Datalake 3.0 → `docs/INTEGRATION.md` · the on-device pipeline in one diagram →
+  [Mental Model for Evaluators](#mental-model-for-evaluators).
+
 ## Repository Layout
 
 ```text
