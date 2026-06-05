@@ -21,13 +21,18 @@ export {
 // --- Enrollment (multi-frame centroid template) -------------------------
 export {createEnrollmentFaceEmbedding} from '../enrollmentTemplate';
 
-// --- Liveness (offline anti-spoofing: blink + head-turn) ----------------
+// --- Liveness (offline anti-spoofing: randomised blink / smile / head-turn) -
 export {
+  challengePrompt,
   evaluateLiveness,
   eyeAspectRatio,
   headTurnRatio,
   livenessChallengeType,
+  mouthSmileRatio,
+  pickLivenessChallenge,
   sampleLivenessFrame,
+  LIVENESS_CHALLENGE_POOL,
+  type LivenessChallenge,
   type LivenessFrame,
   type LivenessProgress,
   type LivenessSignal,

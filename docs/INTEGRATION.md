@@ -18,7 +18,7 @@ required to enroll or authenticate.
 | SDK facade | `app/src/faceAuth/sdk/index.ts` | The only import surface you need |
 | Recognition | `embeddingModel.ts`, `matching.ts`, `vectorMath.ts` | MobileFaceNet embedding + cosine match |
 | Enrollment | `enrollmentTemplate.ts` | Multi-frame centroid template |
-| Liveness | `verifyLiveness.ts` | Offline blink (EAR) + head-turn anti-spoofing |
+| Liveness | `verifyLiveness.ts` | Offline randomised anti-spoofing: blink (EAR) / smile / turn-left / turn-right |
 | Preprocessing | `preprocessing.ts` | 112×112 RGB normalized crop |
 | Native FaceMesh | `native/MediaPipeFaceMesh.ts` (+ Android Kotlin / iOS Swift) | 478-point landmarks + native crop |
 | Secure storage | `native/FaceTemplateStore.ts` (+ native) | Encrypted template + sync queue |
@@ -93,14 +93,20 @@ import {
   detectMediaPipeFaceMesh,
   sampleLivenessFrame,
   evaluateLiveness,
+  pickLivenessChallenge,
+  challengePrompt,
 } from './src/faceAuth/sdk';
 
-// 1. Gate on offline liveness (blink OR slight head-turn) across a few frames.
+// 1. Pick ONE random challenge per attempt and gate on it (blink / smile /
+//    turn-left / turn-right). Only the chosen challenge is accepted, so a
+//    recording of a different gesture cannot be replayed.
+const challenge = pickLivenessChallenge();
+showPrompt(challengePrompt(challenge)); // e.g. "Smile to prove you are live"
 const frames = [];
 for (const photoPath of capturedPhotoPaths) {
   frames.push(sampleLivenessFrame(await detectMediaPipeFaceMesh(photoPath)));
 }
-if (!evaluateLiveness(frames).passed) {
+if (!evaluateLiveness(frames, challenge).passed) {
   return reject('liveness-failed'); // a static photo never passes
 }
 

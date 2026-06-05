@@ -25,7 +25,7 @@ to AWS (ECS/EC2 + DocumentDB or self-managed MongoDB).
             ┌──────────────────────── DEVICE (offline-capable) ────────────────────────┐
   Camera ──▶│ VisionCamera ─▶ MediaPipe FaceMesh ─▶ 112×112 crop ─▶ MobileFaceNet (TFLite)│
             │                       │                                      │             │
-            │                  Liveness (EAR blink / head-turn)       512-d embedding     │
+            │            Liveness (random: blink / smile / turn L·R)   512-d embedding     │
             │                       │                                      │             │
             │                  gate ✓ ──────────────▶ cosine match vs encrypted template │
             │                                                  │                          │
@@ -93,21 +93,31 @@ For high-security 1:1 use, raise it to ≥0.70 and re-validate (see
 
 ## 4. Offline liveness / anti-spoofing
 
-Two independent, **scale-invariant** signals computed from FaceMesh
-(`verifyLiveness.ts`); a live person passes by doing **either**:
+On login, `VerifyFaceScreen` draws **one challenge at random** per attempt
+(`pickLivenessChallenge`) from {BLINK, SMILE, TURN_LEFT, TURN_RIGHT} and accepts
+**only that challenge** — so a recording of a different gesture cannot be
+replayed. Every challenge is detected from a *temporal change* in scale-invariant
+FaceMesh geometry that a static photo/screen cannot reproduce (`verifyLiveness.ts`):
 
 - **Blink (Eye-Aspect-Ratio)** — vertical eyelid gap / horizontal eye width,
   averaged over both eyes (left indices 159/145/33/133, right 386/374/263/362).
-  A blink is registered when both an **open** (EAR ≥ 0.27) and a **closed**
-  (EAR ≤ 0.19) state are observed across the frame window. A static photo/screen
-  holds a constant EAR and never qualifies.
-- **Head-turn** — nose offset from the eye-centre line, normalized by eye
-  distance; `|ratio| ≥ 0.07` counts as a turn. (Onboarding requires a turn and a
-  return to the opposite side.)
+  Registered when both an **open** (EAR ≥ 0.27) and a **closed** (EAR ≤ 0.19)
+  state are observed across the frame window.
+- **Smile (mouth-width ratio)** — mouth corner-to-corner distance (61↔291) over
+  inter-ocular distance (33↔263). Registered when both a **neutral** (≤ 0.50) and
+  a **widened** (≥ 0.58) state are observed; a fixed smile in a photo holds a
+  constant ratio and never qualifies. (Band is exported for on-device tuning.)
+- **Head-turn (left / right)** — signed nose offset from the eye-centre line,
+  normalized by eye distance; `ratio ≥ 0.07` (right) or `≤ −0.07` (left) counts.
+  The direction is preserved end-to-end and reported as the backend challenge
+  type (`TURN_LEFT` / `TURN_RIGHT`), not a hardcoded label.
 
 The match is **gated**: `VerifyFaceScreen` collects frames and refuses to run
-recognition until `evaluateLiveness(...)` passes — closing the photo/replay
-attack on login. Liveness is unit-tested (`verifyLiveness.test.ts`).
+recognition until `evaluateLiveness(frames, challenge)` passes for the required
+challenge — closing the photo/replay attack on login. All four challenges,
+randomisation, smile geometry, and direction handling are unit-tested
+(`verifyLiveness.test.ts`, 15 cases). (Onboarding uses its own gate: a turn and a
+return to the opposite side.)
 
 ## 5. Sync & Purge (offline → online, "local data to be purged")
 

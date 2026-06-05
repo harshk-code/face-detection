@@ -7,11 +7,13 @@ import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
 import {matchFaceEmbedding} from '../faceAuth/matching';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
 import {
+  challengePrompt,
   evaluateLiveness,
   livenessChallengeType,
+  pickLivenessChallenge,
   sampleLivenessFrame,
+  type LivenessChallenge,
   type LivenessFrame,
-  type LivenessSignal,
 } from '../faceAuth/verifyLiveness';
 import type {CapturedFacePhoto, FaceTemplate} from '../faceAuth/types';
 import {
@@ -52,7 +54,10 @@ export function VerifyFaceScreen({
   );
   const livenessFramesRef = useRef<LivenessFrame[]>([]);
   const livenessPassedRef = useRef(false);
-  const livenessSignalRef = useRef<LivenessSignal | null>(null);
+  const livenessSignalRef = useRef<LivenessChallenge | null>(null);
+  // One challenge is drawn at random per login attempt. Only this challenge is
+  // accepted, so a recording of a different gesture cannot be replayed.
+  const livenessChallengeRef = useRef<LivenessChallenge>(pickLivenessChallenge());
   const recentScoresRef = useRef<number[]>([]);
   const startedAtRef = useRef(0);
 
@@ -61,7 +66,9 @@ export function VerifyFaceScreen({
   const [phase, setPhase] = useState<Phase>('liveness');
   const [progress, setProgress] = useState(0);
   const [matchDisplay, setMatchDisplay] = useState<MatchDisplay>(null);
-  const [toast, setToast] = useState('Blink or turn your head slightly');
+  const [toast, setToast] = useState(() =>
+    challengePrompt(livenessChallengeRef.current),
+  );
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -117,11 +124,12 @@ export function VerifyFaceScreen({
           sampleLivenessFrame(faceMesh),
         ].slice(-MAX_LIVENESS_FRAMES);
 
-        const liveness = evaluateLiveness(livenessFramesRef.current);
+        const challenge = livenessChallengeRef.current;
+        const liveness = evaluateLiveness(livenessFramesRef.current, challenge);
         setProgress(liveness.progress);
 
         if (!liveness.passed) {
-          setToast('Blink or turn your head slightly to prove you are live');
+          setToast(challengePrompt(challenge));
           scheduleAutoCapture(LIVENESS_SAMPLE_DELAY_MS);
           return;
         }
