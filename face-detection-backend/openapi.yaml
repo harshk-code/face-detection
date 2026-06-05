@@ -588,11 +588,12 @@ components:
     TenantHeader:
       name: x-tenant-id
       in: header
-      required: true
+      required: false
       schema:
         type: string
-      description: Tenant id for tenant-scoped API calls. Tenant id is no longer accepted
-        in tenant-scoped URL paths.
+        example: Cars24
+      description: Optional compatibility header. Single-tenant mode always uses
+        the default Cars24 tenant internally.
     TenantId:
       name: tenantId
       in: path
@@ -733,27 +734,27 @@ components:
             - TURN_LEFT
             - TURN_RIGHT
             - NOD
+            - FACE_PRESENT
         active:
           type: boolean
     CreateUserRequest:
       type: object
+      description: Supports either the admin payload with configs/embeddings or the
+        mobile onboarding payload with faceTemplate/liveness/app.
       required:
       - employeeId
-      - username
-      - password
       - name
-      - configs
-      - embeddings
       properties:
         employeeId:
           type: string
         username:
           type: string
+          description: Optional for mobile onboarding; backend derives it from employeeId.
         password:
           type: string
           format: password
           description: Stage 1 demo password stored for simple string matching. It
-            is not returned in user responses.
+            is optional for mobile onboarding and is not returned in user responses.
         name:
           type: string
         role:
@@ -764,6 +765,62 @@ components:
           type: array
           items:
             "$ref": "#/components/schemas/Embedding"
+        faceTemplate:
+          "$ref": "#/components/schemas/MobileFaceTemplate"
+        liveness:
+          "$ref": "#/components/schemas/MobileLiveness"
+        app:
+          "$ref": "#/components/schemas/MobileAppPayload"
+    MobileFaceTemplate:
+      type: object
+      required:
+      - embedding
+      - embeddingDimension
+      - templateId
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        embedding:
+          type: array
+          items:
+            type: number
+        embeddingDimension:
+          type: integer
+          example: 512
+        modelAssetName:
+          type: string
+          example: w600k_mbf_float16.tflite
+        modelVersion:
+          type: string
+          example: mobilefacenet_arcface_w600k_fp16_v1
+        similarityThreshold:
+          type: number
+          example: 0.69
+        templateId:
+          type: string
+    MobileLiveness:
+      type: object
+      properties:
+        requiredMovements:
+          type: array
+          items:
+            type: string
+        type:
+          type: string
+          example: HEAD_TURN
+        verifiedOffline:
+          type: boolean
+    MobileAppPayload:
+      type: object
+      properties:
+        appVersion:
+          type: string
+        platform:
+          type: string
+          enum:
+          - IOS
+          - ANDROID
     User:
       type: object
       properties:
@@ -858,6 +915,9 @@ components:
           example: 1.0.0
         imei:
           type: string
+        offlineAuthEnabled:
+          type: boolean
+          description: Accepted for mobile app compatibility and ignored by the backend.
     UpdateClientRequest:
       type: object
       properties:
@@ -947,40 +1007,63 @@ components:
       - eventId
       - result
       - faceScore
-      - livenessScore
-      - challengeTypes
       - latencyMs
-      - embedding
       - capturedAt
       properties:
         eventId:
           type: string
         result:
           type: string
+          description: FAILED is accepted from the mobile app and stored as FACE_FAILED.
           enum:
           - SUCCESS
           - FACE_FAILED
           - LIVENESS_FAILED
           - ERROR
+          - FAILED
         failureReason:
           type: string
         faceScore:
           type: number
         livenessScore:
           type: number
+          description: Optional for mobile events; derived from liveness.passed when omitted.
         challengeTypes:
           type: array
           items:
             type: string
+            enum:
+            - BLINK
+            - SMILE
+            - TURN_LEFT
+            - TURN_RIGHT
+            - NOD
+            - FACE_PRESENT
+          description: Optional for mobile events; derived from liveness.type when omitted.
         latencyMs:
           type: integer
         embedding:
           type: array
+          description: Optional for mobile events; backend stores an empty vector when omitted.
           items:
             type: number
         capturedAt:
           type: string
           format: date-time
+        liveness:
+          type: object
+          properties:
+            passed:
+              type: boolean
+            type:
+              type: string
+              example: FACE_PRESENT
+        modelVersion:
+          type: string
+        threshold:
+          type: number
+        userId:
+          type: string
     SyncEventsResponse:
       type: object
       properties:

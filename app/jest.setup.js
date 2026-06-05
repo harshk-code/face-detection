@@ -25,6 +25,7 @@ jest.mock('react-native-vision-camera', () => ({
   }),
 }));
 
-jest.mock('react-native-vision-camera-face-detector', () => ({
-  useFaceDetectorOutput: () => ({type: 'mock-face-detector-output'}),
+jest.mock('react-native-device-info', () => ({
+  getDeviceName: jest.fn(() => Promise.resolve('Test Device')),
+  getVersion: jest.fn(() => '0.0.1'),
 }));
