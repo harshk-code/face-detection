@@ -13,6 +13,7 @@ import {
   getStoredFaceTemplate,
   saveStoredFaceTemplate,
 } from '../faceAuth/localTemplateStore';
+import {registerOnboardingAndClient} from '../faceAuth/backendApi';
 import type {FaceEmbedding, FaceTemplate} from '../faceAuth/types';
 import {
   getCameraPermissionStatus,
@@ -184,6 +185,7 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
         templateId: template.templateId,
       });
       setLocalTemplate(template);
+      syncTemplateWithBackend(template);
     } catch (error) {
       logError('FaceAuthProvider.saveTemplate', error);
       throw error;
@@ -227,6 +229,37 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
       {children}
     </FaceAuthContext.Provider>
   );
+
+  function syncTemplateWithBackend(template: FaceTemplate) {
+    void registerOnboardingAndClient(template)
+      .then(async backendIds => {
+        if (!backendIds) {
+          return;
+        }
+
+        const syncedTemplate: FaceTemplate = {
+          ...template,
+          backendClientId: backendIds.backendClientId,
+          backendSyncedAt: new Date().toISOString(),
+          backendUserId: backendIds.backendUserId,
+        };
+
+        await saveStoredFaceTemplate(syncedTemplate);
+        setLocalTemplate(currentTemplate =>
+          currentTemplate?.templateId === syncedTemplate.templateId
+            ? syncedTemplate
+            : currentTemplate,
+        );
+        logInfo('app:onboard-template:backend-ids-saved', {
+          backendClientId: backendIds.backendClientId,
+          backendUserId: backendIds.backendUserId,
+          personnelId: template.personnelId,
+        });
+      })
+      .catch(error => {
+        logError('app:onboard-template:backend-id-save-error', error);
+      });
+  }
 }
 
 export function useFaceAuth() {

@@ -1,4 +1,5 @@
 import React from 'react';
+import {CommonActions} from '@react-navigation/native';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 
 import {useFaceAuth} from '../app/FaceAuthContext';
@@ -87,7 +88,7 @@ export function OnboardFormRoute({navigation}: ScreenProps<'OnboardForm'>) {
           logInfo('app:onboard-template:navigate-home:execute', {
             personnelId: template.personnelId,
           });
-          navigation.navigate(Screens.Home);
+          resetToRoute(navigation, Screens.Home);
         });
       }}
     />
@@ -124,7 +125,7 @@ export function HomeRoute({navigation}: ScreenProps<'Home'>) {
         logInfo('app:clear-data:navigate-intro:scheduled', {});
         runAfterFrame(() => {
           logInfo('app:clear-data:navigate-intro:execute', {});
-          navigation.navigate(Screens.Intro);
+          resetToRoute(navigation, Screens.Intro);
         });
       }}
       onLogin={async () => {
@@ -163,7 +164,7 @@ export function LoginRoute({navigation}: ScreenProps<'Login'>) {
     <VerifyFaceScreen
       localTemplate={localTemplate}
       onAuthenticated={() => {
-        navigation.navigate(Screens.Profile);
+        navigation.replace(Screens.Profile);
       }}
       onBack={() => {
         navigation.goBack();
@@ -192,7 +193,7 @@ export function ProfileRoute({navigation}: ScreenProps<'Profile'>) {
     <ProfileScreen
       template={localTemplate}
       onBackHome={() => {
-        navigation.navigate(Screens.Home);
+        resetToRoute(navigation, Screens.Home);
       }}
     />
   );
@@ -219,4 +220,16 @@ function MissingEmbeddingRoute({onContinue}: {onContinue: () => void}) {
 
 function runAfterFrame(callback: () => void) {
   requestAnimationFrame(callback);
+}
+
+function resetToRoute(
+  navigation: ScreenProps<keyof RootStackParamList>['navigation'],
+  routeName: keyof RootStackParamList,
+) {
+  navigation.dispatch(
+    CommonActions.reset({
+      index: 0,
+      routes: [{name: routeName}],
+    }),
+  );
 }

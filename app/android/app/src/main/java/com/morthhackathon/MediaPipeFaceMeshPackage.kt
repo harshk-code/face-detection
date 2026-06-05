@@ -9,6 +9,7 @@ class MediaPipeFaceMeshPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
       listOf(
           MediaPipeFaceMeshModule(reactContext),
+          FaceTemplateStoreModule(reactContext),
       )
 
   override fun createViewManagers(

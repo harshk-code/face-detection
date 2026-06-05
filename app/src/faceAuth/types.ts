@@ -62,6 +62,9 @@ export type FaceTemplate = {
   modelVersion: string;
   threshold: number;
   createdAt: string;
+  backendClientId?: string;
+  backendSyncedAt?: string;
+  backendUserId?: string;
 };
 
 export type RegisterFaceTemplateRequest = {
