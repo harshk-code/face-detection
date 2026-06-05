@@ -25,6 +25,16 @@ jest.mock('react-native-vision-camera', () => ({
   }),
 }));
 
-jest.mock('react-native-vision-camera-face-detector', () => ({
-  useFaceDetectorOutput: () => ({type: 'mock-face-detector-output'}),
+jest.mock('react-native-device-info', () => ({
+  getVersion: () => '1.0.0',
+  getDeviceName: () => Promise.resolve('Test Device'),
 }));
+
+// Virtual: this package is referenced by screens but not installed for tests.
+jest.mock(
+  'react-native-vision-camera-face-detector',
+  () => ({
+    useFaceDetectorOutput: () => ({type: 'mock-face-detector-output'}),
+  }),
+  {virtual: true},
+);

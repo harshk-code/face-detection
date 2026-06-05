@@ -27,6 +27,67 @@ export function matchFaceEmbedding(
   };
 }
 
+export type RosterEntry = {
+  templateId: string;
+  personnelId: string;
+  embedding: number[];
+};
+
+export type IdentifyResult = {
+  personnelId: string | null;
+  templateId: string | null;
+  score: number;
+  margin: number;
+};
+
+/**
+ * Anti-look-alike margin for 1:N identification. The winner must beat the
+ * runner-up by at least this much, otherwise the match is rejected as ambiguous.
+ */
+export const LOOKALIKE_MARGIN = 0.08;
+
+/**
+ * 1:N identification: pick the roster entry most similar to the live embedding.
+ * Accept only if the best score clears the threshold AND beats the second-best
+ * by LOOKALIKE_MARGIN — this defeats confident-but-wrong matches on look-alikes.
+ */
+export function identifyFace(
+  liveEmbedding: number[],
+  roster: RosterEntry[],
+  options: {threshold?: number; margin?: number} = {},
+): IdentifyResult {
+  const threshold = options.threshold ?? FACE_AUTH_CONFIG.similarityThreshold;
+  const margin = options.margin ?? LOOKALIKE_MARGIN;
+
+  let best: {entry: RosterEntry; score: number} | null = null;
+  let secondScore = -Infinity;
+
+  for (const entry of roster) {
+    const score = cosineSimilarity(liveEmbedding, entry.embedding);
+    if (!best || score > best.score) {
+      secondScore = best ? best.score : secondScore;
+      best = {entry, score};
+    } else if (score > secondScore) {
+      secondScore = score;
+    }
+  }
+
+  if (!best) {
+    return {personnelId: null, templateId: null, score: 0, margin: 0};
+  }
+
+  const runnerUp = secondScore === -Infinity ? 0 : secondScore;
+  const gap = best.score - runnerUp;
+  const accepted = best.score >= threshold && gap >= margin;
+
+  return {
+    personnelId: accepted ? best.entry.personnelId : null,
+    templateId: accepted ? best.entry.templateId : null,
+    score: best.score,
+    margin: gap,
+  };
+}
+
 export function cosineSimilarity(a: number[], b: number[]) {
   if (a.length !== b.length || a.length === 0) {
     return 0;

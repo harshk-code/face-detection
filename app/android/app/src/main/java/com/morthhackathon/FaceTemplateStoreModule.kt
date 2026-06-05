@@ -1,6 +1,5 @@
 package com.morthhackathon
 
-import android.content.Context
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
@@ -9,8 +8,12 @@ import com.facebook.react.bridge.ReactMethod
 class FaceTemplateStoreModule(
     private val reactContext: ReactApplicationContext
 ) : ReactContextBaseJavaModule(reactContext) {
-  private val preferences =
-      reactContext.getSharedPreferences("face_template_store", Context.MODE_PRIVATE)
+  private val preferences by lazy {
+    val prefs = SecurePrefs.get(reactContext, "face_template_store_secure")
+    // Migrate any plaintext template written by an earlier app version.
+    SecurePrefs.migrateLegacyValue(reactContext, "face_template_store", TEMPLATE_KEY, prefs)
+    prefs
+  }
 
   override fun getName(): String = "FaceTemplateStore"
 

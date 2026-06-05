@@ -2,11 +2,10 @@ import {Platform} from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 
 import {FACE_AUTH_CONFIG} from './modelConfig';
+import {enqueueAuthEvent} from './authEventQueue';
+import {API_BASE_URL, TENANT_ID} from './backendClient';
 import type {FaceMatchResult, FaceTemplate} from './types';
 import {logError, logInfo} from '../utils/logError';
-
-const API_BASE_URL = 'https://api.cars24.com/gw/plt/bffsvc';
-const TENANT_ID = 'Cars24';
 
 type BackendOnboardingResult = {
   backendClientId: string;
@@ -92,16 +91,13 @@ export async function registerOnboardingAndClient(
   }
 }
 
+/**
+ * Record an auth event into the crash-safe offline queue (durably persisted,
+ * retried, ACK-before-purge) instead of a one-shot POST. Returns immediately;
+ * the queue flushes in the background and survives offline windows + restarts.
+ */
 export function syncAuthEventFireAndForget(input: AuthEventInput) {
-  void syncAuthEvent(input);
-}
-
-async function syncAuthEvent({
-  capturedAt,
-  latencyMs,
-  matchResult,
-  template,
-}: AuthEventInput) {
+  const {capturedAt, latencyMs, matchResult, template} = input;
   if (!template.backendClientId) {
     logInfo('backend:auth-event:skip', {
       reason: 'missing-backend-client-id',
@@ -109,42 +105,18 @@ async function syncAuthEvent({
     });
     return;
   }
-
-  try {
-    const payload = {
-      events: [
-        {
-          capturedAt,
-          eventId: createEventId(template),
-          faceScore: Number(matchResult.score.toFixed(6)),
-          liveness: {
-            passed: true,
-            type: 'FACE_PRESENT',
-          },
-          modelVersion: template.modelVersion,
-          result: matchResult.matched ? 'SUCCESS' : 'FAILED',
-          threshold: matchResult.threshold,
-          userId: template.backendUserId ?? null,
-          latencyMs,
-        },
-      ],
-    };
-
-    const response = await postJson<unknown>(
-      `/api/clients/${encodeURIComponent(
-        template.backendClientId,
-      )}/sync/events`,
-      payload,
-    );
-
-    logInfo('backend:auth-event:complete', {
-      response,
-      result: matchResult.matched ? 'SUCCESS' : 'FAILED',
-      templateId: template.templateId,
-    });
-  } catch (error) {
-    logError('backend:auth-event:error', error);
-  }
+  void enqueueAuthEvent({
+    eventId: createEventId(template),
+    clientId: template.backendClientId,
+    capturedAt,
+    faceScore: Number(matchResult.score.toFixed(6)),
+    result: matchResult.matched ? 'SUCCESS' : 'FAILED',
+    threshold: matchResult.threshold,
+    modelVersion: template.modelVersion,
+    userId: template.backendUserId ?? null,
+    latencyMs,
+    liveness: {passed: true, type: 'FACE_PRESENT'},
+  });
 }
 
 async function postJson<ResponseBody>(path: string, body: unknown) {

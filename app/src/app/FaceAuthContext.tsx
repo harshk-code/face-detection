@@ -14,6 +14,7 @@ import {
   saveStoredFaceTemplate,
 } from '../faceAuth/localTemplateStore';
 import {registerOnboardingAndClient} from '../faceAuth/backendApi';
+import {flushAuthEvents} from '../faceAuth/authEventQueue';
 import type {FaceEmbedding, FaceTemplate} from '../faceAuth/types';
 import {
   getCameraPermissionStatus,
@@ -57,6 +58,11 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
     });
     setLocalTemplate(storedTemplate);
     setIsHydrated(true);
+
+    // Drain any auth events queued offline in a previous session.
+    if (storedTemplate?.backendClientId) {
+      void flushAuthEvents(storedTemplate.backendClientId);
+    }
   }, []);
 
   useEffect(() => {

@@ -10,6 +10,7 @@ class MediaPipeFaceMeshPackage : ReactPackage {
       listOf(
           MediaPipeFaceMeshModule(reactContext),
           FaceTemplateStoreModule(reactContext),
+          EventQueueStoreModule(reactContext),
       )
 
   override fun createViewManagers(
