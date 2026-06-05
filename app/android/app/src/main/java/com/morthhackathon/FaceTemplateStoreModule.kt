@@ -48,7 +48,25 @@ class FaceTemplateStoreModule(
     promise.resolve(true)
   }
 
+  @ReactMethod
+  fun getApiBaseUrl(promise: Promise) {
+    promise.resolve(preferences.getString(API_BASE_URL_KEY, null))
+  }
+
+  @ReactMethod
+  fun saveApiBaseUrl(baseUrl: String, promise: Promise) {
+    preferences.edit().putString(API_BASE_URL_KEY, baseUrl).apply()
+    promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun clearApiBaseUrl(promise: Promise) {
+    preferences.edit().remove(API_BASE_URL_KEY).apply()
+    promise.resolve(true)
+  }
+
   private companion object {
+    const val API_BASE_URL_KEY = "api_base_url"
     const val SYNC_QUEUE_KEY = "offline_api_sync_queue_json"
     const val TEMPLATE_KEY = "local_face_template_json"
   }

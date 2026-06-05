@@ -1,4 +1,5 @@
 export const ROOT_STACK_SCREENS = {
+  ApiSettings: 'ApiSettings',
   Home: 'Home',
   Intro: 'Intro',
   Login: 'Login',

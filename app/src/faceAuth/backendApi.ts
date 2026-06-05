@@ -1,11 +1,11 @@
 import {Platform} from 'react-native';
 import DeviceInfo from 'react-native-device-info';
 
+import {getApiBaseUrl} from './apiBaseUrlStore';
 import {FACE_AUTH_CONFIG} from './modelConfig';
 import type {FaceTemplate} from './types';
 import {logError, logInfo} from '../utils/logError';
 
-const API_BASE_URL = 'https://c24-bff-service-stage.qac24svc.dev/';
 const TENANT_ID = 'Cars24';
 
 type UserOnboardingResponse = {
@@ -124,9 +124,11 @@ export async function postAuthEvent(
 }
 
 async function postJson<ResponseBody>(path: string, body: unknown) {
-  const url = `${API_BASE_URL.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+  const apiBaseUrl = await getApiBaseUrl();
+  const url = `${apiBaseUrl.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
 
   logInfo('backend:request', {
+    baseUrl: apiBaseUrl,
     path,
     url,
   });

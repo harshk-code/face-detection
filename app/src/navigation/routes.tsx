@@ -3,6 +3,7 @@ import {CommonActions} from '@react-navigation/native';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 
 import {useFaceAuth} from '../app/FaceAuthContext';
+import {ApiSettingsScreen} from '../screens/ApiSettingsScreen';
 import {LoadingScreen} from '../screens/LoadingScreen';
 import {HomeScreen} from '../screens/HomeScreen';
 import {IntroScreen} from '../screens/IntroScreen';
@@ -25,6 +26,21 @@ import type {RootStackParamList} from './types';
 
 type ScreenProps<RouteName extends keyof RootStackParamList> =
   NativeStackScreenProps<RootStackParamList, RouteName>;
+
+export function ApiSettingsRoute({navigation}: ScreenProps<'ApiSettings'>) {
+  return (
+    <ApiSettingsScreen
+      onBack={() => {
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+          return;
+        }
+
+        navigation.navigate(Screens.Home);
+      }}
+    />
+  );
+}
 
 export function IntroRoute({navigation}: ScreenProps<'Intro'>) {
   const {permissionMessage, prepareOnboarding} = useFaceAuth();

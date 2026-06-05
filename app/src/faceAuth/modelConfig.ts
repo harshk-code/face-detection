@@ -9,7 +9,7 @@ export const FACE_AUTH_CONFIG = {
   modelVersion: FACE_AUTH_MODEL_VERSION,
   normalizeMean: 127.5,
   normalizeStd: 128,
-  similarityThreshold: 0.75,
+  similarityThreshold: 0.60,
 } as const;
 
 export const FACE_AUTH_ASSET_PATHS = {
