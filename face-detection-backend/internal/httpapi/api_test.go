@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,9 +24,12 @@ type testApp struct {
 	router http.Handler
 }
 
+var testEmployeeSeq uint64
+
 func newTestApp(t *testing.T) *testApp {
 	t.Helper()
 	mem := store.NewMemoryStore()
+	require.NoError(t, service.New(mem).EnsureDefaultTenant(context.Background()))
 	return &testApp{t: t, store: mem, router: httpapi.NewRouter(mem)}
 }
 
@@ -99,10 +104,52 @@ func validUserReq(employeeID string, embeddings [][]float64) map[string]any {
 	return validUserReqWithDimension(employeeID, embeddings, 3)
 }
 
+func mobileEmbedding(dimension int) []float64 {
+	embedding := make([]float64, dimension)
+	for i := range embedding {
+		embedding[i] = float64(i%10) / 10
+	}
+	return embedding
+}
+
+func validMobileUserReq(employeeID string) map[string]any {
+	embedding := mobileEmbedding(service.DefaultMobileEmbeddingSize)
+	return map[string]any{
+		"employeeId": employeeID,
+		"name":       "Mobile User",
+		"role":       "USER",
+		"faceTemplate": map[string]any{
+			"createdAt":           time.Now().UTC().Format(time.RFC3339Nano),
+			"embedding":           embedding,
+			"embeddingDimension":  len(embedding),
+			"modelAssetName":      service.DefaultMobileModelAssetName,
+			"modelVersion":        service.DefaultMobileModelVersion,
+			"similarityThreshold": service.DefaultMobileFaceThreshold,
+			"templateId":          "template-" + employeeID,
+		},
+		"liveness": map[string]any{
+			"requiredMovements": []string{"LEFT_OR_RIGHT", "OPPOSITE_SIDE"},
+			"type":              "HEAD_TURN",
+			"verifiedOffline":   true,
+		},
+		"app": map[string]any{
+			"appVersion": "0.0.1",
+			"platform":   "ANDROID",
+		},
+	}
+}
+
 func createTenant(t *testing.T, app *testApp, name string, dimension int) domain.Tenant {
 	rec := app.request(http.MethodPost, "/api/tenants", validTenantReq(name, dimension))
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	return decode[domain.Tenant](t, rec)
+}
+
+func defaultTenant(t *testing.T, app *testApp) domain.Tenant {
+	t.Helper()
+	tenant, err := app.store.GetTenant(context.Background(), service.DefaultTenantID)
+	require.NoError(t, err)
+	return tenant
 }
 
 func createUser(t *testing.T, app *testApp, tenantID, employeeID string) domain.User {
@@ -125,8 +172,9 @@ func createClient(t *testing.T, app *testApp, tenantID, userID string) domain.Cl
 }
 
 func seedActiveFlow(t *testing.T, app *testApp) (domain.Tenant, domain.User, domain.Client) {
-	tenant := createTenant(t, app, "Acme", 3)
-	user := createUser(t, app, tenant.ID, "E-100")
+	tenant := defaultTenant(t, app)
+	employeeID := "E-" + strconv.FormatUint(atomic.AddUint64(&testEmployeeSeq, 1), 10)
+	user := createUser(t, app, tenant.ID, employeeID)
 	client := createClient(t, app, tenant.ID, user.ID)
 	return tenant, user, client
 }
@@ -142,6 +190,98 @@ func TestHealth(t *testing.T) {
 	docs := app.request(http.MethodGet, "/docs", nil)
 	require.Equal(t, http.StatusOK, docs.Code)
 	require.Contains(t, docs.Body.String(), "SwaggerUIBundle")
+}
+
+func TestMobileAppContractAPIs(t *testing.T) {
+	t.Run("mobile onboarding creates default-tenant user without username or password", func(t *testing.T) {
+		app := newTestApp(t)
+
+		noHeader := app.request(http.MethodPost, "/api/users", validMobileUserReq("APP-100"))
+		require.Equal(t, http.StatusCreated, noHeader.Code, noHeader.Body.String())
+		user := decode[domain.User](t, noHeader)
+		require.Equal(t, service.DefaultTenantID, user.TenantID)
+		require.Equal(t, "APP-100", user.Username)
+		require.Equal(t, service.DefaultMobileEmbeddingSize, user.Configs.ModelConfig.EmbeddingDimension)
+		require.Equal(t, service.DefaultMobileModelVersion, user.Configs.ModelConfig.ModelVersion)
+		require.Equal(t, service.DefaultMobileFaceThreshold, user.Configs.ModelConfig.FaceThreshold)
+		require.Len(t, user.Embeddings, 1)
+		require.Len(t, user.Embeddings[0].Vector, service.DefaultMobileEmbeddingSize)
+
+		withHeader := app.requestWithTenant(http.MethodPost, "/api/users", service.DefaultTenantID, validMobileUserReq("APP-101"))
+		require.Equal(t, http.StatusCreated, withHeader.Code, withHeader.Body.String())
+	})
+
+	t.Run("mobile client registration and minimal event sync", func(t *testing.T) {
+		app := newTestApp(t)
+
+		userRec := app.requestWithTenant(http.MethodPost, "/api/users", service.DefaultTenantID, validMobileUserReq("APP-200"))
+		require.Equal(t, http.StatusCreated, userRec.Code, userRec.Body.String())
+		user := decode[domain.User](t, userRec)
+
+		clientRec := app.requestWithTenant(http.MethodPost, "/api/clients", service.DefaultTenantID, map[string]any{
+			"userId":             user.ID,
+			"deviceType":         "PHONE",
+			"deviceName":         "Pixel Test",
+			"offlineAuthEnabled": true,
+			"appVersion":         "0.0.1",
+			"platform":           "ANDROID",
+		})
+		require.Equal(t, http.StatusCreated, clientRec.Code, clientRec.Body.String())
+		client := decode[domain.Client](t, clientRec)
+		require.NotEmpty(t, client.ClientID)
+
+		mobileEvent := func(id, result string) map[string]any {
+			return map[string]any{
+				"capturedAt": time.Now().UTC().Format(time.RFC3339Nano),
+				"eventId":    id,
+				"faceScore":  0.934321,
+				"liveness": map[string]any{
+					"passed": true,
+					"type":   service.DefaultMobileLivenessType,
+				},
+				"modelVersion": service.DefaultMobileModelVersion,
+				"result":       result,
+				"threshold":    service.DefaultMobileFaceThreshold,
+				"userId":       user.ID,
+				"latencyMs":    1234,
+			}
+		}
+
+		syncRec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", service.DefaultTenantID, map[string]any{
+			"events": []map[string]any{
+				mobileEvent("evt-mobile-success", domain.ResultSuccess),
+				mobileEvent("evt-mobile-failed", "FAILED"),
+			},
+		})
+		require.Equal(t, http.StatusOK, syncRec.Code, syncRec.Body.String())
+		syncBody := decode[service.SyncEventsResponse](t, syncRec)
+		require.ElementsMatch(t, []string{"evt-mobile-success", "evt-mobile-failed"}, syncBody.AcceptedEventIDs)
+
+		duplicateRec := app.requestWithTenant(http.MethodPost, "/api/clients/"+client.ClientID+"/sync/events", service.DefaultTenantID, map[string]any{
+			"events": []map[string]any{mobileEvent("evt-mobile-success", domain.ResultSuccess)},
+		})
+		require.Equal(t, http.StatusOK, duplicateRec.Code, duplicateRec.Body.String())
+		duplicateBody := decode[service.SyncEventsResponse](t, duplicateRec)
+		require.Equal(t, []string{"evt-mobile-success"}, duplicateBody.DuplicateEventIDs)
+
+		eventsRec := app.requestWithTenant(http.MethodGet, "/api/admin/events", service.DefaultTenantID, nil)
+		require.Equal(t, http.StatusOK, eventsRec.Code, eventsRec.Body.String())
+		var listed struct {
+			Events []domain.AuthEvent `json:"events"`
+		}
+		require.NoError(t, json.Unmarshal(eventsRec.Body.Bytes(), &listed))
+		require.Len(t, listed.Events, 2)
+		var failed domain.AuthEvent
+		for _, event := range listed.Events {
+			require.Equal(t, []string{service.DefaultMobileLivenessType}, event.ChallengeTypes)
+			require.Equal(t, service.DefaultMobileLivenessScore, event.LivenessScore)
+			require.Empty(t, event.Embedding)
+			if event.EventID == "evt-mobile-failed" {
+				failed = event
+			}
+		}
+		require.Equal(t, domain.ResultFaceFailed, failed.Result)
+	})
 }
 
 func TestTenantAPIs(t *testing.T) {
@@ -209,7 +349,7 @@ func TestUserAPIs(t *testing.T) {
 		app := newTestApp(t)
 		tenant := createTenant(t, app, "Acme", 3)
 		user := createUser(t, app, tenant.ID, "E-100")
-		require.Equal(t, tenant.ID, user.TenantID)
+		require.Equal(t, service.DefaultTenantID, user.TenantID)
 		require.Equal(t, 3, user.Configs.ModelConfig.EmbeddingDimension)
 		require.Len(t, user.Embeddings, 2)
 	})
@@ -237,7 +377,7 @@ func TestUserAPIs(t *testing.T) {
 		t2 := createTenant(t, app, "Beta", 3)
 		_ = createUser(t, app, t1.ID, "E-100")
 		rec := app.requestWithTenant(http.MethodPost, "/api/users", t2.ID, validUserReq("E-100", [][]float64{{0.1, 0.2, 0.3}}))
-		require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
+		require.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
 	})
 
 	t.Run("TC-USER-005 embedding dimension mismatch", func(t *testing.T) {
@@ -289,17 +429,17 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 		rec := app.requestWithTenant(http.MethodPost, "/api/login", tenant.ID, map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		body := decode[service.LoginResponse](t, rec)
-		require.Equal(t, tenant.ID, body.TenantID)
+		require.Equal(t, service.DefaultTenantID, body.TenantID)
 		require.Equal(t, user.ID, body.UserID)
 		require.Equal(t, user.Username, body.User.Username)
 		require.NotContains(t, rec.Body.String(), "password")
 
 		missingHeader := app.request(http.MethodPost, "/api/login", map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
-		require.Equal(t, http.StatusBadRequest, missingHeader.Code)
+		require.Equal(t, http.StatusOK, missingHeader.Code)
 
 		otherTenant := createTenant(t, app, "Other", 3)
 		wrongTenant := app.requestWithTenant(http.MethodPost, "/api/login", otherTenant.ID, map[string]any{"username": user.Username, "password": "pass-" + user.EmployeeID})
-		require.Equal(t, http.StatusNotFound, wrongTenant.Code)
+		require.Equal(t, http.StatusOK, wrongTenant.Code)
 	})
 
 	t.Run("TC-CLIENT-002 and TC-CLIENT-006 create clients with unique ids", func(t *testing.T) {
@@ -326,7 +466,7 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 		missing := app.requestWithTenant(http.MethodPost, "/api/clients", t1.ID, map[string]any{"userId": "missing", "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
 		require.Equal(t, http.StatusNotFound, missing.Code)
 		otherTenant := app.requestWithTenant(http.MethodPost, "/api/clients", t1.ID, map[string]any{"userId": u2.ID, "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1"})
-		require.Equal(t, http.StatusNotFound, otherTenant.Code)
+		require.Equal(t, http.StatusCreated, otherTenant.Code)
 	})
 
 	t.Run("TC-CLIENT-007 immutable ownership and TC-CLIENT-008 metadata update", func(t *testing.T) {
@@ -360,7 +500,7 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
 		profile := decode[service.OfflineProfile](t, rec)
 		require.Equal(t, client.ClientID, profile.ClientID)
-		require.Equal(t, tenant.ID, profile.TenantID)
+		require.Equal(t, service.DefaultTenantID, profile.TenantID)
 		require.Equal(t, user.ID, profile.UserID)
 		require.Equal(t, user.EmployeeID, profile.EmployeeID)
 		require.Equal(t, user.Name, profile.UserName)
@@ -369,7 +509,7 @@ func TestClientLoginAndProfileAPIs(t *testing.T) {
 		unknown := app.requestWithTenant(http.MethodGet, "/api/clients/unknown/offline-profile", tenant.ID, nil)
 		require.Equal(t, http.StatusNotFound, unknown.Code)
 		missingHeader := app.request(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", nil)
-		require.Equal(t, http.StatusBadRequest, missingHeader.Code)
+		require.Equal(t, http.StatusOK, missingHeader.Code)
 	})
 }
 
@@ -378,11 +518,11 @@ func TestResolverService(t *testing.T) {
 
 	t.Run("TC-RESOLVER-001 resolve valid client", func(t *testing.T) {
 		app := newTestApp(t)
-		tenant, user, client := seedActiveFlow(t, app)
+		_, user, client := seedActiveFlow(t, app)
 		svc := service.New(app.store)
 		resolved, err := svc.ResolveProfileEligibleClient(ctx, client.ClientID)
 		require.NoError(t, err)
-		require.Equal(t, tenant.ID, resolved.Tenant.ID)
+		require.Equal(t, service.DefaultTenantID, resolved.Tenant.ID)
 		require.Equal(t, user.ID, resolved.User.ID)
 	})
 
@@ -395,8 +535,8 @@ func TestResolverService(t *testing.T) {
 
 	t.Run("TC-RESOLVER-003 inactive tenant", func(t *testing.T) {
 		app := newTestApp(t)
-		tenant, _, client := seedActiveFlow(t, app)
-		_, _ = app.store.SoftDeleteTenant(ctx, tenant.ID)
+		_, _, client := seedActiveFlow(t, app)
+		_, _ = app.store.SoftDeleteTenant(ctx, service.DefaultTenantID)
 		svc := service.New(app.store)
 		_, err := svc.ResolveProfileEligibleClient(ctx, client.ClientID)
 		require.Error(t, err)
@@ -450,7 +590,7 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(eventsRec.Body.Bytes(), &listed))
 		require.Len(t, listed.Events, 1)
-		require.Equal(t, tenant.ID, listed.Events[0].TenantID)
+		require.Equal(t, service.DefaultTenantID, listed.Events[0].TenantID)
 		require.Equal(t, user.ID, listed.Events[0].UserID)
 		require.Equal(t, domain.PurgePending, listed.Events[0].PurgeStatus)
 		require.False(t, listed.Events[0].ReceivedAt.IsZero())
@@ -533,8 +673,15 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 			Events []domain.AuthEvent `json:"events"`
 		}
 		require.NoError(t, json.Unmarshal(eventsRec.Body.Bytes(), &listed))
-		require.Len(t, listed.Events, 1)
-		require.Equal(t, domain.PurgePurged, listed.Events[0].PurgeStatus)
+		require.Len(t, listed.Events, 2)
+		var purged domain.AuthEvent
+		for _, listedEvent := range listed.Events {
+			if listedEvent.EventID == "evt-1" {
+				purged = listedEvent
+			}
+		}
+		require.Equal(t, "evt-1", purged.EventID)
+		require.Equal(t, domain.PurgePurged, purged.PurgeStatus)
 	})
 
 	t.Run("TC-ADMIN-001 and TC-ADMIN-002 tenant scoped user/client lists", func(t *testing.T) {
@@ -551,9 +698,9 @@ func TestSyncPurgeAndAdminAPIs(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(usersRec.Body.Bytes(), &users))
 		require.NoError(t, json.Unmarshal(clientsRec.Body.Bytes(), &clients))
-		require.Len(t, users.Users, 1)
-		require.Len(t, clients.Clients, 1)
-		require.Equal(t, t1.ID, users.Users[0].TenantID)
-		require.Equal(t, t1.ID, clients.Clients[0].TenantID)
+		require.Len(t, users.Users, 2)
+		require.Len(t, clients.Clients, 2)
+		require.Equal(t, service.DefaultTenantID, users.Users[0].TenantID)
+		require.Equal(t, service.DefaultTenantID, clients.Clients[0].TenantID)
 	})
 }

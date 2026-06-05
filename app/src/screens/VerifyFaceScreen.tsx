@@ -11,7 +11,7 @@ import type {
   DetectedFaceSnapshot,
   FaceTemplate,
 } from '../faceAuth/types';
-import {logError, logInfo} from '../utils/logError';
+import {logError} from '../utils/logError';
 
 type Props = {
   localTemplate: FaceTemplate;
