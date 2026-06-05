@@ -58,6 +58,9 @@ func main() {
 	if err := mongoStore.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("ensure mongo indexes: %v", err)
 	}
+	if err := service.New(mongoStore).EnsureDefaultTenant(ctx); err != nil {
+		log.Fatalf("ensure default tenant: %v", err)
+	}
 
 	if !cfg.AuthEnabled {
 		log.Printf("WARNING: AUTH_ENABLED=false; all routes are unauthenticated")

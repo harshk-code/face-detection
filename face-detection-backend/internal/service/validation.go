@@ -7,11 +7,12 @@ import (
 )
 
 var allowedChallenges = map[string]bool{
-	"BLINK":      true,
-	"SMILE":      true,
-	"TURN_LEFT":  true,
-	"TURN_RIGHT": true,
-	"NOD":        true,
+	"BLINK":        true,
+	"SMILE":        true,
+	"TURN_LEFT":    true,
+	"TURN_RIGHT":   true,
+	"NOD":          true,
+	"FACE_PRESENT": true,
 }
 
 var allowedResults = map[string]bool{

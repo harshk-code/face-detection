@@ -172,16 +172,7 @@ func respond(c *gin.Context, status int, value any, err error) {
 }
 
 func tenantIDFromHeader(c *gin.Context) (string, bool) {
-	tenantID := c.GetHeader("x-tenant-id")
-	if tenantID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": service.AppError{
-			Code:   "VALIDATION_ERROR",
-			Msg:    "x-tenant-id header is required",
-			Status: http.StatusBadRequest,
-		}})
-		return "", false
-	}
-	return tenantID, true
+	return service.DefaultTenantID, true
 }
 
 func (api *API) createTenant(c *gin.Context) {

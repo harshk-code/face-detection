@@ -26,8 +26,8 @@ jest.mock('react-native-vision-camera', () => ({
 }));
 
 jest.mock('react-native-device-info', () => ({
-  getVersion: () => '1.0.0',
-  getDeviceName: () => Promise.resolve('Test Device'),
+  getDeviceName: jest.fn(() => Promise.resolve('Test Device')),
+  getVersion: jest.fn(() => '0.0.1'),
 }));
 
 // Virtual: this package is referenced by screens but not installed for tests.

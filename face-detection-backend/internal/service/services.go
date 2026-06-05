@@ -18,6 +18,17 @@ type Service struct {
 	resolverCache *cache.TTL[string, ResolvedClientContext]
 }
 
+const (
+	DefaultTenantID             = "Cars24"
+	DefaultMobileModelVersion   = "mobilefacenet_arcface_w600k_fp16_v1"
+	DefaultMobileModelAssetName = "w600k_mbf_float16.tflite"
+	DefaultMobileFaceThreshold  = 0.69
+	DefaultMobileLivenessScore  = 1.0
+	DefaultMobileEmbeddingSize  = 512
+	DefaultMobileLivenessType   = "FACE_PRESENT"
+	DefaultMobileLivenessThresh = 0.69
+)
+
 func New(store store.Store) *Service {
 	return NewWithSigner(store, NoopSigner{})
 }
@@ -43,6 +54,62 @@ func (s *Service) SigningPublicKey() (string, string) {
 // VerifyProfile checks a profile against its detached signature.
 func (s *Service) VerifyProfile(profile OfflineProfile, signatureB64 string) bool {
 	return s.signer.Verify(profile, signatureB64)
+}
+
+func DefaultTenantConfig() domain.TenantConfig {
+	return domain.TenantConfig{
+		ModelConfig: domain.ModelConfig{
+			ModelVersion:       DefaultMobileModelVersion,
+			FaceThreshold:      DefaultMobileFaceThreshold,
+			LivenessThreshold:  DefaultMobileLivenessThresh,
+			EmbeddingDimension: DefaultMobileEmbeddingSize,
+			ModelChecksum:      DefaultMobileModelAssetName,
+			Active:             true,
+		},
+		LivenessConfig: domain.LivenessConfig{
+			ChallengeTypes: []string{"TURN_LEFT", "TURN_RIGHT"},
+			Active:         true,
+		},
+	}
+}
+
+func (s *Service) EnsureDefaultTenant(ctx context.Context) error {
+	existing, err := s.store.GetTenant(ctx, DefaultTenantID)
+	if errors.Is(err, store.ErrNotFound) {
+		now := time.Now().UTC()
+		_, err := s.store.CreateTenant(ctx, domain.Tenant{
+			ID:        DefaultTenantID,
+			Name:      DefaultTenantID,
+			Status:    domain.StatusActive,
+			Configs:   DefaultTenantConfig(),
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+
+	changed := false
+	if strings.TrimSpace(existing.Name) == "" {
+		existing.Name = DefaultTenantID
+		changed = true
+	}
+	if existing.Status != domain.StatusActive {
+		existing.Status = domain.StatusActive
+		changed = true
+	}
+	if err := ValidateTenantConfig(existing.Configs); err != nil {
+		existing.Configs = DefaultTenantConfig()
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	existing.UpdatedAt = time.Now().UTC()
+	_, err = s.store.UpdateTenant(ctx, existing)
+	return err
 }
 
 type CreateTenantRequest struct {
@@ -130,6 +197,31 @@ type CreateUserRequest struct {
 	Role       string               `json:"role"`
 	Configs    *domain.TenantConfig `json:"configs"`
 	Embeddings []domain.Embedding   `json:"embeddings"`
+
+	FaceTemplate *MobileFaceTemplate `json:"faceTemplate"`
+	Liveness     *MobileLiveness     `json:"liveness"`
+	App          *MobileAppPayload   `json:"app"`
+}
+
+type MobileFaceTemplate struct {
+	CreatedAt           string    `json:"createdAt"`
+	Embedding           []float64 `json:"embedding"`
+	EmbeddingDimension  int       `json:"embeddingDimension"`
+	ModelAssetName      string    `json:"modelAssetName"`
+	ModelVersion        string    `json:"modelVersion"`
+	SimilarityThreshold float64   `json:"similarityThreshold"`
+	TemplateID          string    `json:"templateId"`
+}
+
+type MobileLiveness struct {
+	RequiredMovements []string `json:"requiredMovements"`
+	Type              string   `json:"type"`
+	VerifiedOffline   bool     `json:"verifiedOffline"`
+}
+
+type MobileAppPayload struct {
+	AppVersion string `json:"appVersion"`
+	Platform   string `json:"platform"`
 }
 
 // UpdateUserRequest is a superset of CreateUserRequest that additionally allows
@@ -156,8 +248,14 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 	if strings.TrimSpace(req.EmployeeID) == "" || strings.TrimSpace(req.Name) == "" {
 		return domain.User{}, BadRequest("employeeId and name are required")
 	}
-	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
-		return domain.User{}, BadRequest("username and password are required")
+	if req.isMobileOnboarding() {
+		req.normalizeMobileOnboarding()
+	}
+	if strings.TrimSpace(req.Username) == "" {
+		return domain.User{}, BadRequest("username is required")
+	}
+	if strings.TrimSpace(req.Password) == "" && !req.isMobileOnboarding() {
+		return domain.User{}, BadRequest("password is required")
 	}
 	if req.Configs == nil {
 		return domain.User{}, BadRequest("configs is required")
@@ -193,6 +291,49 @@ func (s *Service) CreateUser(ctx context.Context, tenantID string, req CreateUse
 	}
 	s.invalidateResolverCache()
 	return created, err
+}
+
+func (req CreateUserRequest) isMobileOnboarding() bool {
+	return req.FaceTemplate != nil
+}
+
+func (req *CreateUserRequest) normalizeMobileOnboarding() {
+	if strings.TrimSpace(req.Username) == "" {
+		req.Username = req.EmployeeID
+	}
+	if req.Configs == nil {
+		config := req.FaceTemplate.tenantConfig()
+		req.Configs = &config
+	}
+	if len(req.Embeddings) == 0 {
+		embeddingID := req.FaceTemplate.TemplateID
+		if strings.TrimSpace(embeddingID) == "" {
+			embeddingID = req.EmployeeID
+		}
+		req.Embeddings = []domain.Embedding{{
+			ID:     embeddingID,
+			Vector: req.FaceTemplate.Embedding,
+		}}
+	}
+}
+
+func (template MobileFaceTemplate) tenantConfig() domain.TenantConfig {
+	config := DefaultTenantConfig()
+	if strings.TrimSpace(template.ModelVersion) != "" {
+		config.ModelConfig.ModelVersion = template.ModelVersion
+	}
+	if template.SimilarityThreshold > 0 {
+		config.ModelConfig.FaceThreshold = template.SimilarityThreshold
+	}
+	if template.EmbeddingDimension > 0 {
+		config.ModelConfig.EmbeddingDimension = template.EmbeddingDimension
+	} else if len(template.Embedding) > 0 {
+		config.ModelConfig.EmbeddingDimension = len(template.Embedding)
+	}
+	if strings.TrimSpace(template.ModelAssetName) != "" {
+		config.ModelConfig.ModelChecksum = template.ModelAssetName
+	}
+	return config
 }
 
 func normalizeEmbeddingIDs(embeddings []domain.Embedding) []domain.Embedding {
@@ -323,13 +464,14 @@ func (s *Service) Login(ctx context.Context, tenantID string, req LoginRequest) 
 }
 
 type CreateClientRequest struct {
-	TenantID   string `json:"-"`
-	UserID     string `json:"userId"`
-	DeviceType string `json:"deviceType"`
-	DeviceName string `json:"deviceName"`
-	Platform   string `json:"platform"`
-	AppVersion string `json:"appVersion"`
-	IMEI       string `json:"imei"`
+	TenantID           string `json:"-"`
+	UserID             string `json:"userId"`
+	DeviceType         string `json:"deviceType"`
+	DeviceName         string `json:"deviceName"`
+	Platform           string `json:"platform"`
+	AppVersion         string `json:"appVersion"`
+	IMEI               string `json:"imei"`
+	OfflineAuthEnabled *bool  `json:"offlineAuthEnabled"`
 }
 
 type UpdateClientRequest struct {
@@ -572,15 +714,24 @@ type SyncEventsRequest struct {
 }
 
 type SyncEventInput struct {
-	EventID        string    `json:"eventId"`
-	Result         string    `json:"result"`
-	FailureReason  string    `json:"failureReason"`
-	FaceScore      float64   `json:"faceScore"`
-	LivenessScore  float64   `json:"livenessScore"`
-	ChallengeTypes []string  `json:"challengeTypes"`
-	LatencyMs      int       `json:"latencyMs"`
-	Embedding      []float64 `json:"embedding"`
-	CapturedAt     time.Time `json:"capturedAt"`
+	EventID        string             `json:"eventId"`
+	Result         string             `json:"result"`
+	FailureReason  string             `json:"failureReason"`
+	FaceScore      float64            `json:"faceScore"`
+	LivenessScore  *float64           `json:"livenessScore"`
+	ChallengeTypes []string           `json:"challengeTypes"`
+	LatencyMs      int                `json:"latencyMs"`
+	Embedding      []float64          `json:"embedding"`
+	CapturedAt     time.Time          `json:"capturedAt"`
+	Liveness       *SyncEventLiveness `json:"liveness"`
+	ModelVersion   string             `json:"modelVersion"`
+	Threshold      float64            `json:"threshold"`
+	UserID         string             `json:"userId"`
+}
+
+type SyncEventLiveness struct {
+	Passed bool   `json:"passed"`
+	Type   string `json:"type"`
 }
 
 type RejectedEvent struct {
@@ -608,8 +759,9 @@ func (s *Service) SyncEvents(ctx context.Context, tenantID, clientID string, req
 	response := SyncEventsResponse{AcceptedEventIDs: []string{}, DuplicateEventIDs: []string{}, RejectedEvents: []RejectedEvent{}}
 	now := time.Now().UTC()
 	for _, input := range req.Events {
-		if reason := s.validateSyncEvent(resolved, input); reason != "" {
-			response.RejectedEvents = append(response.RejectedEvents, RejectedEvent{EventID: input.EventID, Reason: reason})
+		normalized := normalizeSyncEventInput(input)
+		if reason := s.validateSyncEvent(resolved, normalized); reason != "" {
+			response.RejectedEvents = append(response.RejectedEvents, RejectedEvent{EventID: normalized.EventID, Reason: reason})
 			continue
 		}
 		event := domain.AuthEvent{
@@ -617,15 +769,15 @@ func (s *Service) SyncEvents(ctx context.Context, tenantID, clientID string, req
 			TenantID:       resolved.Tenant.ID,
 			UserID:         resolved.User.ID,
 			ClientID:       resolved.Client.ClientID,
-			EventID:        input.EventID,
-			Result:         input.Result,
-			FailureReason:  input.FailureReason,
-			FaceScore:      input.FaceScore,
-			LivenessScore:  input.LivenessScore,
-			ChallengeTypes: input.ChallengeTypes,
-			LatencyMs:      input.LatencyMs,
-			Embedding:      input.Embedding,
-			CapturedAt:     input.CapturedAt,
+			EventID:        normalized.EventID,
+			Result:         normalized.Result,
+			FailureReason:  normalized.FailureReason,
+			FaceScore:      normalized.FaceScore,
+			LivenessScore:  normalized.livenessScoreValue(),
+			ChallengeTypes: normalized.ChallengeTypes,
+			LatencyMs:      normalized.LatencyMs,
+			Embedding:      normalized.embeddingValue(),
+			CapturedAt:     normalized.CapturedAt,
 			ReceivedAt:     now,
 			PurgeStatus:    domain.PurgePending,
 		}
@@ -642,6 +794,41 @@ func (s *Service) SyncEvents(ctx context.Context, tenantID, clientID string, req
 	return response, nil
 }
 
+func normalizeSyncEventInput(event SyncEventInput) SyncEventInput {
+	if event.Result == "FAILED" {
+		event.Result = domain.ResultFaceFailed
+	}
+	if event.LivenessScore == nil && event.hasMobileEventFields() {
+		score := 0.0
+		if event.Liveness != nil && event.Liveness.Passed {
+			score = DefaultMobileLivenessScore
+		}
+		event.LivenessScore = &score
+	}
+	if len(event.ChallengeTypes) == 0 && event.hasMobileEventFields() {
+		challengeType := DefaultMobileLivenessType
+		if event.Liveness != nil && strings.TrimSpace(event.Liveness.Type) != "" {
+			challengeType = event.Liveness.Type
+		}
+		event.ChallengeTypes = []string{challengeType}
+	}
+	return event
+}
+
+func (event SyncEventInput) livenessScoreValue() float64 {
+	if event.LivenessScore == nil {
+		return 0
+	}
+	return *event.LivenessScore
+}
+
+func (event SyncEventInput) embeddingValue() []float64 {
+	if event.Embedding == nil {
+		return []float64{}
+	}
+	return event.Embedding
+}
+
 func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEventInput) string {
 	if strings.TrimSpace(event.EventID) == "" {
 		return "eventId is required"
@@ -655,9 +842,32 @@ func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEv
 	if err := ValidateTenantConfig(resolved.User.Configs); err != nil {
 		return "user config is missing or invalid"
 	}
-	// Embedding is optional on the wire: on-device auth keeps biometrics local
-	// and syncs only the abstract result. Validate the dimension only if present.
-	if len(event.Embedding) > 0 {
+	if event.LivenessScore == nil {
+		return "livenessScore is required"
+	}
+	if len(event.ChallengeTypes) == 0 {
+		return "challengeTypes is required"
+	}
+	for _, challengeType := range event.ChallengeTypes {
+		if !allowedChallenges[challengeType] {
+			return "invalid challenge type"
+		}
+	}
+	if event.LivenessScore != nil && (*event.LivenessScore < 0 || *event.LivenessScore > 1) {
+		return "livenessScore must be between 0 and 1"
+	}
+	if event.FaceScore < 0 || event.FaceScore > 1 {
+		return "faceScore must be between 0 and 1"
+	}
+	if event.LatencyMs < 0 {
+		return "latencyMs must be non-negative"
+	}
+	// Embedding is optional on the wire when mobile event fields are present:
+	// on-device auth keeps biometrics local and syncs only the abstract result.
+	if event.Embedding == nil && !event.hasMobileEventFields() {
+		return "embedding is required"
+	}
+	if event.Embedding != nil {
 		if err := ValidateEventEmbedding(event.Embedding, resolved.User.Configs.ModelConfig.EmbeddingDimension); err != nil {
 			return err.Error()
 		}
@@ -666,6 +876,13 @@ func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEv
 		return "event captured after client deactivation"
 	}
 	return ""
+}
+
+func (event SyncEventInput) hasMobileEventFields() bool {
+	return event.Liveness != nil ||
+		strings.TrimSpace(event.ModelVersion) != "" ||
+		event.Threshold != 0 ||
+		strings.TrimSpace(event.UserID) != ""
 }
 
 type PurgeAckRequest struct {

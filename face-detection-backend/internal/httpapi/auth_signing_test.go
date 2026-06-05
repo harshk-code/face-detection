@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -17,6 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// The backend uses a single default tenant; the x-tenant-id header is ignored.
+const defaultTenantID = service.DefaultTenantID
+
 // secureApp wires an auth-enabled router with a real Ed25519 signer.
 type secureApp struct {
 	t      *testing.T
@@ -31,7 +35,9 @@ func newSecureApp(t *testing.T) *secureApp {
 	}
 	signer, err := service.NewEd25519Signer(seed)
 	require.NoError(t, err)
-	router := httpapi.NewRouterWithOptions(store.NewMemoryStore(), httpapi.Options{
+	mem := store.NewMemoryStore()
+	require.NoError(t, service.New(mem).EnsureDefaultTenant(context.Background()))
+	router := httpapi.NewRouterWithOptions(mem, httpapi.Options{
 		Auth:      auth.NewManager("test-secret", true),
 		Signer:    signer,
 		AdminUser: "admin",
@@ -113,22 +119,18 @@ func TestReactivateUser(t *testing.T) {
 	app := newSecureApp(t)
 	token := app.adminToken()
 
-	tRec := app.do(http.MethodPost, "/api/tenants", token, "", tenantBody("Acme"))
-	require.Equal(t, http.StatusCreated, tRec.Code, tRec.Body.String())
-	tenant := decode[domain.Tenant](t, tRec)
-
-	uRec := app.do(http.MethodPost, "/api/users", token, tenant.ID, userBody("E1"))
+	uRec := app.do(http.MethodPost, "/api/users", token, defaultTenantID, userBody("E1"))
 	require.Equal(t, http.StatusCreated, uRec.Code, uRec.Body.String())
 	user := decode[domain.User](t, uRec)
 	require.Empty(t, user.Password, "password must not be serialized")
 
 	// Soft delete -> INACTIVE.
-	del := app.do(http.MethodDelete, "/api/users/"+user.ID, token, tenant.ID, nil)
+	del := app.do(http.MethodDelete, "/api/users/"+user.ID, token, defaultTenantID, nil)
 	require.Equal(t, http.StatusOK, del.Code)
 	require.Equal(t, domain.StatusInactive, decode[domain.User](t, del).Status)
 
 	// Reactivate via status update -> ACTIVE.
-	react := app.do(http.MethodPut, "/api/users/"+user.ID, token, tenant.ID, map[string]any{"status": "ACTIVE"})
+	react := app.do(http.MethodPut, "/api/users/"+user.ID, token, defaultTenantID, map[string]any{"status": "ACTIVE"})
 	require.Equal(t, http.StatusOK, react.Code, react.Body.String())
 	require.Equal(t, domain.StatusActive, decode[domain.User](t, react).Status)
 }
@@ -136,11 +138,10 @@ func TestReactivateUser(t *testing.T) {
 func TestBcryptLoginAndUserToken(t *testing.T) {
 	app := newSecureApp(t)
 	token := app.adminToken()
-	tenant := decode[domain.Tenant](t, app.do(http.MethodPost, "/api/tenants", token, "", tenantBody("Acme")))
-	app.do(http.MethodPost, "/api/users", token, tenant.ID, userBody("E1"))
+	app.do(http.MethodPost, "/api/users", token, defaultTenantID, userBody("E1"))
 
 	// Login with correct password -> token issued.
-	login := app.do(http.MethodPost, "/api/login", "", tenant.ID, map[string]any{"username": "E1", "password": "pw-E1"})
+	login := app.do(http.MethodPost, "/api/login", "", defaultTenantID, map[string]any{"username": "E1", "password": "pw-E1"})
 	require.Equal(t, http.StatusOK, login.Code, login.Body.String())
 	var loginOut struct {
 		Token    string `json:"token"`
@@ -150,41 +151,15 @@ func TestBcryptLoginAndUserToken(t *testing.T) {
 	require.NotEmpty(t, loginOut.Token)
 
 	// Wrong password -> conflict (no token).
-	bad := app.do(http.MethodPost, "/api/login", "", tenant.ID, map[string]any{"username": "E1", "password": "nope"})
+	bad := app.do(http.MethodPost, "/api/login", "", defaultTenantID, map[string]any{"username": "E1", "password": "nope"})
 	require.Equal(t, http.StatusConflict, bad.Code)
-}
-
-func TestUserTokenTenantIsolation(t *testing.T) {
-	app := newSecureApp(t)
-	admin := app.adminToken()
-
-	tenantA := decode[domain.Tenant](t, app.do(http.MethodPost, "/api/tenants", admin, "", tenantBody("A")))
-	tenantB := decode[domain.Tenant](t, app.do(http.MethodPost, "/api/tenants", admin, "", tenantBody("B")))
-	app.do(http.MethodPost, "/api/users", admin, tenantA.ID, userBody("UA"))
-	userB := decode[domain.User](t, app.do(http.MethodPost, "/api/users", admin, tenantB.ID, userBody("UB")))
-	clientB := decode[domain.Client](t, app.do(http.MethodPost, "/api/clients", admin, tenantB.ID, map[string]any{
-		"userId": userB.ID, "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1.0.0",
-	}))
-
-	// User A logs in, obtains a tenant-A token.
-	login := app.do(http.MethodPost, "/api/login", "", tenantA.ID, map[string]any{"username": "UA", "password": "pw-UA"})
-	require.Equal(t, http.StatusOK, login.Code, login.Body.String())
-	var loginOut struct {
-		Token string `json:"token"`
-	}
-	require.NoError(t, json.Unmarshal(login.Body.Bytes(), &loginOut))
-
-	// Even while spoofing x-tenant-id=B, the token forces tenant A -> client B not found.
-	rec := app.do(http.MethodGet, "/api/clients/"+clientB.ClientID+"/offline-profile", loginOut.Token, tenantB.ID, nil)
-	require.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
 }
 
 func TestOfflineProfileSigning(t *testing.T) {
 	app := newSecureApp(t)
 	token := app.adminToken()
-	tenant := decode[domain.Tenant](t, app.do(http.MethodPost, "/api/tenants", token, "", tenantBody("Acme")))
-	user := decode[domain.User](t, app.do(http.MethodPost, "/api/users", token, tenant.ID, userBody("E1")))
-	client := decode[domain.Client](t, app.do(http.MethodPost, "/api/clients", token, tenant.ID, map[string]any{
+	user := decode[domain.User](t, app.do(http.MethodPost, "/api/users", token, defaultTenantID, userBody("E1")))
+	client := decode[domain.Client](t, app.do(http.MethodPost, "/api/clients", token, defaultTenantID, map[string]any{
 		"userId": user.ID, "deviceType": "PHONE", "deviceName": "Pixel", "platform": "ANDROID", "appVersion": "1.0.0",
 	}))
 
@@ -203,7 +178,7 @@ func TestOfflineProfileSigning(t *testing.T) {
 	require.NoError(t, err)
 
 	// Profile carries a signature.
-	profRec := app.do(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", token, tenant.ID, nil)
+	profRec := app.do(http.MethodGet, "/api/clients/"+client.ClientID+"/offline-profile", token, defaultTenantID, nil)
 	require.Equal(t, http.StatusOK, profRec.Code, profRec.Body.String())
 	profile := decode[service.OfflineProfile](t, profRec)
 	require.NotNil(t, profile.Signature)
