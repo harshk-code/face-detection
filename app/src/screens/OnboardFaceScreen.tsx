@@ -177,13 +177,6 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
 
       const update = engine.update(landmarks, Date.now());
       setProgress(update.progress);
-      logInfo('face-auth:liveness:update', {
-        challenge: update.challenge,
-        landmarkCount: faceMesh.landmarks.length,
-        passed: update.passed,
-        progress: Number(update.progress.toFixed(2)),
-        state: update.state,
-      });
 
       if (update.passed) {
         setStepValue('capture-face');
@@ -206,13 +199,20 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
       setError(null);
       scheduleAutoCapture(AUTO_CAPTURE_RETRY_DELAY_MS);
     } catch (onboardError) {
-      logWarning('OnboardFaceScreen.handlePrimaryAction', onboardError);
-      setStatus('Keep your face centered in the frame');
-      setError(
-        onboardError instanceof Error
-          ? onboardError.message
-          : 'Unable to complete onboarding step.',
-      );
+      const message =
+        onboardError instanceof Error ? onboardError.message : '';
+      // No face / camera-not-ready are normal while the user gets into frame.
+      const transient =
+        message.includes('did not detect a face') ||
+        message.includes('Camera is not ready');
+      if (transient) {
+        setStatus('Centre your face, then turn your head');
+        setError(null);
+      } else {
+        logWarning('OnboardFaceScreen.handleAutoCapture', onboardError);
+        setStatus('Keep your face centered in the frame');
+        setError(message || 'Unable to complete onboarding step.');
+      }
       scheduleAutoCapture(AUTO_CAPTURE_RETRY_DELAY_MS);
     } finally {
       if (isMountedRef.current && !isCompletedRef.current) {

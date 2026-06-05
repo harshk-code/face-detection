@@ -68,6 +68,8 @@ export function VerifyFaceScreen({
     }),
   );
   const startedAtRef = useRef(0);
+  const isMountedRef = useRef(true);
+  const doneRef = useRef(false);
 
   const [isFaceDetected, setIsFaceDetected] = useState(false);
   const [isBusy, setIsBusy] = useState(false);
@@ -78,11 +80,14 @@ export function VerifyFaceScreen({
   const [toast, setToast] = useState('Turn your head, then look at the camera');
 
   useEffect(() => {
+    isMountedRef.current = true;
     engineRef.current.issueChallenge('HEAD_TURN');
     startedAtRef.current = Date.now();
     return () => {
+      isMountedRef.current = false;
       if (sampleTimeoutRef.current) {
         clearTimeout(sampleTimeoutRef.current);
+        sampleTimeoutRef.current = null;
       }
     };
   }, []);
@@ -94,23 +99,12 @@ export function VerifyFaceScreen({
     [],
   );
 
-  useEffect(() => {
-    if (!isFaceDetected || isBusy || isInFlightRef.current) {
+  // Single driver: the capture/liveness loop self-schedules via scheduleNext
+  // (guarded by isMounted/done), kicked off once the camera is ready.
+  function scheduleNext(delayMs: number) {
+    if (!isMountedRef.current || doneRef.current) {
       return;
     }
-    sampleTimeoutRef.current = setTimeout(() => {
-      void handleSample();
-    }, SAMPLE_DELAY_MS);
-    return () => {
-      if (sampleTimeoutRef.current) {
-        clearTimeout(sampleTimeoutRef.current);
-      }
-    };
-    // handleSample reads refs and stable props.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isBusy, isFaceDetected]);
-
-  function scheduleNext(delayMs: number) {
     if (sampleTimeoutRef.current) {
       clearTimeout(sampleTimeoutRef.current);
     }
@@ -120,7 +114,7 @@ export function VerifyFaceScreen({
   }
 
   async function handleSample() {
-    if (isInFlightRef.current) {
+    if (isInFlightRef.current || !isMountedRef.current || doneRef.current) {
       return;
     }
     isInFlightRef.current = true;
@@ -196,6 +190,7 @@ export function VerifyFaceScreen({
       setMatchDisplay(outcome.matched ? 'matched' : 'rejected');
       if (outcome.matched) {
         setToast('Face matched. Logging you in...');
+        doneRef.current = true;
         authenticated = true;
         return;
       }
@@ -209,13 +204,21 @@ export function VerifyFaceScreen({
       await delay(RETRY_DELAY_MS);
       scheduleNext(SAMPLE_DELAY_MS);
     } catch (captureError) {
-      logError('VerifyFaceScreen.handleSample', captureError);
-      setToast(
-        captureError instanceof Error
-          ? captureError.message
-          : 'Unable to match face.',
-      );
-      await delay(RETRY_DELAY_MS);
+      const message =
+        captureError instanceof Error ? captureError.message : '';
+      // "No face" / "camera not ready" are normal transient conditions while the
+      // user gets into frame — surface a calm prompt, not a red error.
+      const transient =
+        message.includes('did not detect a face') ||
+        message.includes('Camera is not ready');
+      if (transient) {
+        logInfo('face-auth:verify:waiting', {reason: message});
+        setToast('Position your face in the frame, then turn your head');
+      } else {
+        logError('VerifyFaceScreen.handleSample', captureError);
+        setToast(message || 'Unable to match face.');
+      }
+      await delay(transient ? 0 : RETRY_DELAY_MS);
       scheduleNext(SAMPLE_DELAY_MS);
     } finally {
       setIsBusy(false);
@@ -239,6 +242,9 @@ export function VerifyFaceScreen({
       onCapture={() => undefined}
       onCapturePhotoReady={capturePhoto => {
         capturePhotoRef.current = capturePhoto;
+        if (capturePhoto) {
+          scheduleNext(SAMPLE_DELAY_MS);
+        }
       }}
       onFaceDetectedChange={setIsFaceDetected}
       onFaceSnapshotChange={handleFaceSnapshotChange}

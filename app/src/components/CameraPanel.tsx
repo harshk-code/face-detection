@@ -54,30 +54,16 @@ export function CameraPanel({
       throw new Error('Camera is not ready yet. Please wait for preview.');
     }
 
-    logInfo('camera:v4:capture-start', {
-      active,
-      deviceId: device?.id ?? null,
-      deviceName: device?.name ?? null,
-    });
-
     const photo = await camera.takePhoto({
       enableShutterSound: false,
       flash: 'off',
     });
-    const capturedPhoto: CapturedFacePhoto = {
+    return {
       path: normalizePhotoPath(photo.path),
       photoHeight: photo.height,
       photoWidth: photo.width,
     };
-
-    logInfo('camera:v4:capture-complete', {
-      ...capturedPhoto,
-      isMirrored: photo.isMirrored,
-      orientation: photo.orientation,
-    });
-
-    return capturedPhoto;
-  }, [active, device?.id, device?.name]);
+  }, []);
 
   React.useEffect(() => {
     onCapturePhotoReady?.(capturePhoto);
