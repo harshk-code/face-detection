@@ -1,7 +1,12 @@
 .DS_Store
+**/.DS_Store
 node_modules/
 panel/dist/
 panel/node_modules/
 panel/.vite/
 panel-preview.png
 face-detection-backend/.local/
+
+# JetBrains IDE
+.idea/
+*.iml
