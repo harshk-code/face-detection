@@ -5,7 +5,7 @@ import {
 } from '../native/FaceTemplateStore';
 import {logError, logInfo} from '../utils/logError';
 
-export const DEFAULT_API_BASE_URL = 'https://c24-bff-service-stage.qac24svc.dev/';
+export const DEFAULT_API_BASE_URL = 'http://localhost:18081/';
 
 let cachedApiBaseUrl = DEFAULT_API_BASE_URL;
 let hydrateApiBaseUrlPromise: Promise<string> | null = null;
