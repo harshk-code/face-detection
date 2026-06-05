@@ -291,7 +291,8 @@ Liveness is implemented in:
 app/src/screens/OnboardFaceScreen.tsx
 ```
 
-The current liveness challenge is an active head-turn check.
+The offline liveness gate accepts either a **blink** (eye-aspect-ratio dips closed then
+re-opens) or a **head-turn**, and the login match is blocked until liveness passes.
 
 The app asks for:
 
@@ -486,14 +487,24 @@ inputWidth: 112
 inputHeight: 112
 inputChannels: 3
 embeddingSize: 512
-similarityThreshold: 0.75
+similarityThreshold: 0.60
 normalizeMean: 127.5
 normalizeStd: 128
 ```
 
 Matching uses two thresholds (see `app/src/faceAuth/matching.ts`): the centroid
-cosine threshold `0.75`, and a stricter per-pose-sample threshold `0.80`. A match
-is accepted when the centroid score ≥ 0.75 **or** the best pose-sample score ≥ 0.80.
+cosine threshold `0.60`, and a stricter per-pose-sample threshold `0.80`. A single
+frame is considered a match when the centroid score ≥ 0.60 **or** the best
+pose-sample score ≥ 0.80. Login then confirms with a rolling window
+(`VerifyFaceScreen.tsx`): authentication requires **2 of the last 3 frames** to match,
+**or** one **strong** frame (score ≥ 0.82) — on top of the offline liveness gate.
+
+> Security note: the single-frame centroid threshold (0.60) is intentionally
+> permissive for usability and is backstopped by the 0.80 pose-sample bar, the
+> 2-of-3 rolling window, the 0.82 strong-match shortcut, and the liveness gate. For
+> high-security 1:1 deployments, raise `similarityThreshold` (≥ 0.70) in
+> `app/src/faceAuth/modelConfig.ts` and re-validate FAR/FRR (see
+> `docs/ACCURACY_VALIDATION.md`).
 
 The model file:
 
@@ -568,15 +579,23 @@ similarity = dot(liveEmbedding, storedEmbedding) / (|liveEmbedding| * |storedEmb
 Current thresholds:
 
 ```text
-centroid match: 0.75
-pose-sample match: 0.80
+centroid match:      0.60
+pose-sample match:   0.80
+strong match:        0.82   (single-frame shortcut, VerifyFaceScreen)
+rolling window:      2 of last 3 frames
 ```
 
-Decision:
+Per-frame decision (`matching.ts`):
 
 ```text
-centroidScore >= 0.75  OR  bestPoseSampleScore >= 0.80  -> authenticated
-otherwise                                               -> rejected
+centroidScore >= 0.60  OR  bestPoseSampleScore >= 0.80  -> frame matched
+otherwise                                               -> frame rejected
+```
+
+Login decision (`VerifyFaceScreen.tsx`, after the liveness gate passes):
+
+```text
+score >= 0.82 (strong)  OR  2 of last 3 frames matched  -> authenticated
 ```
 
 The score is logged for debugging, but it is not displayed to the end user.
@@ -885,7 +904,8 @@ Current limitations:
 
 - MediaPipe validation is capture-loop based, not continuous live frame processing.
 - The preview guide box is static, while the actual detection happens after still capture.
-- The match thresholds (`0.75` centroid / `0.80` pose-sample) are tuned for one-to-one
+- The match thresholds (`0.60` centroid / `0.80` pose-sample, with a 2-of-3 window and a
+  0.82 strong-match) are tuned for one-to-one
   matching and should be validated on a larger local test set per deployment.
 - Liveness uses **blink (EAR)** and **head-turn**; a smile (mouth-aspect-ratio)
   challenge is planned as a third option.

@@ -149,9 +149,13 @@ All recognition constants live in `app/src/faceAuth/modelConfig.ts`:
 |---|---|
 | Embedding size | 512 |
 | Input | 112 × 112 × 3 RGB, normalized `(px − 127.5) / 128` |
-| Face match threshold (cosine) | 0.75 |
+| Face match threshold (cosine, `similarityThreshold`) | 0.60 |
 | Pose-sample match threshold | 0.80 |
+| Strong-match shortcut (login) | 0.82 |
+| Login confirmation window | 2 of last 3 frames |
 | Model | `mobilefacenet_arcface_w600k_fp16_v1` (FP16) |
 
 Tune `similarityThreshold` to trade false-accepts vs false-rejects for your
-population and lighting.
+population and lighting. 0.60 is permissive (usability-first) and backstopped by the
+pose-sample bar, the 2-of-3 window, the 0.82 strong-match, and the liveness gate; for
+high-security 1:1 use raise it to ≥0.70 and re-validate (see `docs/ACCURACY_VALIDATION.md`).

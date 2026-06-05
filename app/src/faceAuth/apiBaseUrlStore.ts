@@ -5,7 +5,10 @@ import {
 } from '../native/FaceTemplateStore';
 import {logError, logInfo} from '../utils/logError';
 
-export const DEFAULT_API_BASE_URL = 'http://localhost:18081/';
+// Matches the backend's default port (8080, see face-detection-backend config) and
+// SETUP_GUIDE.md. Override at runtime via the in-app API Settings screen — e.g. the
+// laptop's hotspot IP for a physical phone, or another port if 8080 is occupied.
+export const DEFAULT_API_BASE_URL = 'http://localhost:8080/';
 
 let cachedApiBaseUrl = DEFAULT_API_BASE_URL;
 let hydrateApiBaseUrlPromise: Promise<string> | null = null;
