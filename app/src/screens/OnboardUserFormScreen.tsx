@@ -35,6 +35,7 @@ export function OnboardUserFormScreen({embedding, onBack, onSubmit}: Props) {
       personnelId: normalizedUserId,
       displayName: normalizedUserId,
       embedding: embedding.vector,
+      enrollmentEmbeddings: embedding.samples,
       modelVersion: embedding.modelVersion,
       threshold: getDefaultSimilarityThreshold(),
       createdAt: new Date().toISOString(),

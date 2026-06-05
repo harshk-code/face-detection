@@ -2,16 +2,16 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 
 import {CaptureScreen} from '../components/CaptureScreen';
+import {enqueueAuthEventFireAndForget} from '../faceAuth/authEventQueue';
 import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
 import {matchFaceEmbedding} from '../faceAuth/matching';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
-import {syncAuthEventFireAndForget} from '../faceAuth/backendApi';
 import type {
   CapturedFacePhoto,
   DetectedFaceSnapshot,
   FaceTemplate,
 } from '../faceAuth/types';
-import {logError} from '../utils/logError';
+import {logError, logInfo} from '../utils/logError';
 
 type Props = {
   localTemplate: FaceTemplate;
@@ -19,11 +19,14 @@ type Props = {
   onBack: () => void;
 };
 
-type MatchDisplay = 'matched' | 'rejected' | null;
+type MatchDisplay = 'confirming' | 'matched' | 'rejected' | null;
 
-const AUTO_CAPTURE_DELAY_MS = 900;
-const CAMERA_SETTLE_MS = 650;
-const RETRY_DELAY_MS = 1400;
+const AUTO_CAPTURE_DELAY_MS = 650;
+const CAMERA_SETTLE_MS = 300;
+const GOOD_MATCH_WINDOW_SIZE = 3;
+const REQUIRED_GOOD_MATCHES_IN_WINDOW = 2;
+const RETRY_DELAY_MS = 650;
+const STRONG_MATCH_THRESHOLD = 0.82;
 
 export function VerifyFaceScreen({
   localTemplate,
@@ -35,6 +38,7 @@ export function VerifyFaceScreen({
   );
   const isCaptureInFlightRef = useRef(false);
   const latestFaceRef = useRef<DetectedFaceSnapshot | null>(null);
+  const recentScoresRef = useRef<number[]>([]);
   const capturePhotoRef = useRef<(() => Promise<CapturedFacePhoto>) | null>(
     null,
   );
@@ -95,7 +99,7 @@ export function VerifyFaceScreen({
         throw new Error('Camera is not ready yet. Please try again.');
       }
 
-      const {path, photoHeight, photoWidth} = await capturePhotoRef.current();
+      const { path, photoHeight, photoWidth } = await capturePhotoRef.current();
 
       const faceCrop = await createNormalizedFaceCrop({
         detectedFace: latestFaceRef.current,
@@ -105,20 +109,48 @@ export function VerifyFaceScreen({
       });
       const liveEmbedding = await generateFaceEmbedding(faceCrop);
       const result = matchFaceEmbedding(liveEmbedding.vector, localTemplate);
-      syncAuthEventFireAndForget({
+      enqueueAuthEventFireAndForget({
         capturedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
         matchResult: result,
         template: localTemplate,
       });
-      setMatchDisplay(result.matched ? 'matched' : 'rejected');
-
       if (result.matched) {
-        setToast('Face matched. Logging you in...');
-        authenticated = true;
+        const decision = recordMatchScore(result.score, result.threshold);
+        logInfo('face-auth:verify:sample-accepted', {
+          decision,
+          recentScores: recentScoresRef.current.map(score =>
+            Number(score.toFixed(6)),
+          ),
+          requiredGoodMatchesInWindow: REQUIRED_GOOD_MATCHES_IN_WINDOW,
+          score: Number(result.score.toFixed(6)),
+          strongMatchThreshold: STRONG_MATCH_THRESHOLD,
+          threshold: result.threshold,
+          windowSize: GOOD_MATCH_WINDOW_SIZE,
+        });
+
+        if (decision.authenticated) {
+          setMatchDisplay('matched');
+          setToast('Face matched. Logging you in...');
+          authenticated = true;
+          return;
+        }
+
+        setMatchDisplay('confirming');
+        setToast('Face matched. Hold still for confirmation...');
+        await delay(RETRY_DELAY_MS);
         return;
       }
 
+      recordMatchScore(result.score, result.threshold);
+      setMatchDisplay('rejected');
+      logInfo('face-auth:verify:sample-rejected', {
+        recentScores: recentScoresRef.current.map(score =>
+          Number(score.toFixed(6)),
+        ),
+        score: Number(result.score.toFixed(6)),
+        threshold: result.threshold,
+      });
       setToast('Face did not match. Please try again.');
       await delay(RETRY_DELAY_MS);
     } catch (captureError) {
@@ -137,6 +169,25 @@ export function VerifyFaceScreen({
         onAuthenticated();
       }
     }
+  }
+
+  function recordMatchScore(score: number, threshold: number) {
+    const recentScores = [...recentScoresRef.current, score].slice(
+      -GOOD_MATCH_WINDOW_SIZE,
+    );
+    recentScoresRef.current = recentScores;
+    const goodMatchCount = recentScores.filter(
+      recentScore => recentScore >= threshold,
+    ).length;
+    const strongMatch = score >= STRONG_MATCH_THRESHOLD;
+
+    return {
+      authenticated:
+        strongMatch || goodMatchCount >= REQUIRED_GOOD_MATCHES_IN_WINDOW,
+      goodMatchCount,
+      reason: strongMatch ? 'strong-match' : 'rolling-window',
+      strongMatch,
+    };
   }
 
   return (
@@ -161,20 +212,26 @@ export function VerifyFaceScreen({
             styles.statusCard,
             matchDisplay === 'matched'
               ? styles.statusMatched
+              : matchDisplay === 'confirming'
+              ? styles.statusConfirming
               : matchDisplay
-                ? styles.statusRejected
-                : null,
-          ]}>
+              ? styles.statusRejected
+              : null,
+          ]}
+        >
           <Text style={styles.statusTitle}>{toast}</Text>
           {matchDisplay ? (
             <Text style={styles.statusMeta}>
               {matchDisplay === 'matched'
                 ? 'Authentication successful'
+                : matchDisplay === 'confirming'
+                ? 'Confirming with one more capture'
                 : 'Keep your face centered and try again'}
             </Text>
           ) : (
             <Text style={styles.statusMeta}>
-              Waiting for a clear face to compare with {localTemplate.personnelId}
+              Waiting for a clear face to compare with{' '}
+              {localTemplate.personnelId}
             </Text>
           )}
         </View>
@@ -203,6 +260,10 @@ const styles = StyleSheet.create({
   statusMatched: {
     borderColor: 'rgba(110, 231, 168, 0.55)',
     backgroundColor: 'rgba(22, 101, 52, 0.6)',
+  },
+  statusConfirming: {
+    borderColor: 'rgba(125, 211, 252, 0.55)',
+    backgroundColor: 'rgba(14, 116, 144, 0.58)',
   },
   statusRejected: {
     borderColor: 'rgba(255, 180, 180, 0.55)',

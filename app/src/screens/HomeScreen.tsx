@@ -8,6 +8,8 @@ type Props = {
   localTemplate: FaceTemplate;
   onClearData: () => void;
   onLogin: () => void;
+  onNetworkLogger?: () => void;
+  onSyncStatus: () => void;
   onUpdateOnboarding: () => void;
 };
 
@@ -15,6 +17,8 @@ export function HomeScreen({
   localTemplate,
   onClearData,
   onLogin,
+  onNetworkLogger,
+  onSyncStatus,
   onUpdateOnboarding,
 }: Props) {
   return (
@@ -37,6 +41,18 @@ export function HomeScreen({
       </View>
 
       <View style={styles.bottomActions}>
+        <ActionButton
+          label="Sync Status"
+          variant="secondary"
+          onPress={onSyncStatus}
+        />
+        {__DEV__ && onNetworkLogger ? (
+          <ActionButton
+            label="Network Logs"
+            variant="secondary"
+            onPress={onNetworkLogger}
+          />
+        ) : null}
         <ActionButton
           label="Update Onboarding"
           variant="secondary"
