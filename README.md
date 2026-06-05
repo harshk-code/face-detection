@@ -819,6 +819,8 @@ But those calls are not required to authenticate the user on-device.
 
 ## Setup
 
+For the detailed real-device setup where the backend runs on the laptop and the app connects through the phone hotspot, see [Local App and Backend Setup Guide](SETUP_GUIDE.md).
+
 From the mobile app folder:
 
 ```sh
