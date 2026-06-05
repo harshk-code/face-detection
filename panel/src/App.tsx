@@ -311,10 +311,7 @@ export function App() {
   const [profileValid, setProfileValid] = useState<boolean | null>(null);
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<Tenant | null>(null);
-  const [tenantEditor, setTenantEditor] = useState<Tenant | null | "new">(null);
   const [tenantForm, setTenantForm] = useState<TenantForm>(createTenantForm());
-  const [tenantSearch, setTenantSearch] = useState("");
-  const [tenantStatus, setTenantStatus] = useState<Status | "">("");
 
   const [section, setSection] = useState<Section>("dashboard");
   const [users, setUsers] = useState<User[]>([]);
@@ -332,14 +329,6 @@ export function App() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const filteredTenants = useMemo(() => {
-    const query = tenantSearch.trim().toLowerCase();
-    return tenants.filter((tenant) => {
-      const matchesQuery = !query || `${tenant.name} ${tenant.id}`.toLowerCase().includes(query);
-      const matchesStatus = !tenantStatus || tenant.status === tenantStatus;
-      return matchesQuery && matchesStatus;
-    });
-  }, [tenantSearch, tenantStatus, tenants]);
 
   const selectedUserClients = useMemo(
     () => clients.filter((client) => client.userId === selectedUser?.id),
@@ -395,40 +384,45 @@ export function App() {
     }
   }
 
+  // Single-tenant deployment: load the one configured tenant and its data on login.
   async function loadTenants() {
     await run(async () => {
       const data = await api<{ tenants: Tenant[] }>("/api/tenants");
       setTenants(data.tenants ?? []);
+      const tenant = data.tenants?.[0];
+      if (!tenant) {
+        setError("No tenant is configured on the backend.");
+        return;
+      }
+      await loadTenantData(tenant.id);
     });
   }
 
-  async function selectTenant(tenant: Tenant) {
-    await run(async () => {
-      const detail = await api<Tenant>(`/api/tenants/${tenant.id}`);
-      setSelectedTenant(detail);
-      setTenantForm(createTenantForm(detail));
-      setSection("dashboard");
-      setSelectedUser(null);
-      setSelectedClient(null);
-      setSelectedEvent(null);
-      const [userData, clientData, eventData] = await Promise.all([
-        api<{ users: User[] }>("/api/users", {}, detail.id),
-        api<{ clients: Client[] }>("/api/clients", {}, detail.id),
-        api<{ events: AuthEvent[] }>("/api/admin/events", {}, detail.id)
-      ]);
-      setUsers(userData.users ?? []);
-      setClients(clientData.clients ?? []);
-      setEvents(eventData.events ?? []);
-    });
+  async function loadTenantData(tenantId: string) {
+    const detail = await api<Tenant>(`/api/tenants/${tenantId}`);
+    setSelectedTenant(detail);
+    setTenantForm(createTenantForm(detail));
+    setSection("dashboard");
+    setSelectedUser(null);
+    setSelectedClient(null);
+    setSelectedEvent(null);
+    const [userData, clientData, eventData] = await Promise.all([
+      api<{ users: User[] }>("/api/users"),
+      api<{ clients: Client[] }>("/api/clients"),
+      api<{ events: AuthEvent[] }>("/api/admin/events")
+    ]);
+    setUsers(userData.users ?? []);
+    setClients(clientData.clients ?? []);
+    setEvents(eventData.events ?? []);
   }
 
   async function refreshSelectedTenant() {
     if (!selectedTenant) return;
     const [detail, userData, clientData, eventData] = await Promise.all([
       api<Tenant>(`/api/tenants/${selectedTenant.id}`),
-      api<{ users: User[] }>("/api/users", {}, selectedTenant.id),
-      api<{ clients: Client[] }>("/api/clients", {}, selectedTenant.id),
-      api<{ events: AuthEvent[] }>("/api/admin/events", {}, selectedTenant.id)
+      api<{ users: User[] }>("/api/users"),
+      api<{ clients: Client[] }>("/api/clients"),
+      api<{ events: AuthEvent[] }>("/api/admin/events")
     ]);
     setSelectedTenant(detail);
     setTenantForm(createTenantForm(detail));
@@ -441,57 +435,17 @@ export function App() {
     if (selectedClient) setSelectedClient(nextClients.find((client) => client.clientId === selectedClient.clientId) ?? null);
   }
 
-  function openTenantCreate() {
-    setTenantEditor("new");
-    setTenantForm(createTenantForm());
-  }
-
-  function openTenantEdit(tenant: Tenant) {
-    setTenantEditor(tenant);
-    setTenantForm(createTenantForm(tenant));
-  }
-
+  // Saves the single tenant's name + model/liveness config (no create/delete).
   async function saveTenant() {
     await run(async () => {
+      if (!selectedTenant) return;
       const configs = toTenantConfig(tenantForm);
-      if (tenantEditor === "new" || (!selectedTenant && !tenantEditor)) {
-        await api<Tenant>("/api/tenants", {
-          method: "POST",
-          body: JSON.stringify({ name: tenantForm.name, configs })
-        });
-        setMessage("Tenant created");
-        setTenantEditor(null);
-        await loadTenants();
-        return;
-      }
-      const target = tenantEditor && typeof tenantEditor !== "string" ? tenantEditor : selectedTenant;
-      if (!target) return;
-      const tenant = await api<Tenant>(
-        "/api/tenant",
-        {
-          method: "PUT",
-          body: JSON.stringify({ name: tenantForm.name, status: tenantForm.status, configs })
-        },
-        target.id
-      );
-      setMessage("Tenant updated");
-      setTenantEditor(null);
-      await loadTenants();
-      if (selectedTenant?.id === tenant.id) await selectTenant(tenant);
-    });
-  }
-
-  async function deactivateTenant(tenant: Tenant) {
-    await run(async () => {
-      await api<Tenant>("/api/tenant", { method: "DELETE" }, tenant.id);
-      setMessage("Tenant deactivated");
-      if (selectedTenant?.id === tenant.id) {
-        setSelectedTenant(null);
-        setUsers([]);
-        setClients([]);
-        setEvents([]);
-      }
-      await loadTenants();
+      await api<Tenant>("/api/tenant", {
+        method: "PUT",
+        body: JSON.stringify({ name: tenantForm.name, status: tenantForm.status, configs })
+      });
+      setMessage("Tenant configuration saved");
+      await loadTenantData(selectedTenant.id);
     });
   }
 
@@ -736,80 +690,18 @@ export function App() {
 
   if (!selectedTenant) {
     return (
-      <main className="tenantListPage">
-        <header className="tenantListHero">
-          <div>
-            <h1>Face Auth</h1>
-            <p>Multi-tenant Management Panel</p>
-          </div>
-          <div className="heroActions">
-            {notice}
-            <button className="outlineButton" onClick={logout}><LogOut size={18} /> Sign out</button>
-          </div>
-        </header>
-
-        <section className="tableCard tenantTableCard">
-          <div className="tableToolbar">
-            <div className="searchBox">
-              <Search size={20} />
-              <input
-                aria-label="Search tenants"
-                placeholder="Search tenants..."
-                value={tenantSearch}
-                onChange={(event) => setTenantSearch(event.target.value)}
-              />
+      <main className="loginPage">
+        <div className="loginCard">
+          <div className="loginBrand">
+            <ShieldCheck size={28} />
+            <div>
+              <h1>Face Auth</h1>
+              <p>Loading workspace…</p>
             </div>
-            <select aria-label="Tenant status" value={tenantStatus} onChange={(event) => setTenantStatus(event.target.value as Status | "")}>
-              <option value="">All Status</option>
-              <option value="ACTIVE">ACTIVE</option>
-              <option value="INACTIVE">INACTIVE</option>
-            </select>
-            <button className="outlineButton" onClick={() => void loadTenants()}>
-              <RefreshCw size={18} />
-            </button>
-            <button className="primaryButton" onClick={openTenantCreate}>
-              <Plus size={18} />
-              Create Tenant
-            </button>
           </div>
-
-          <DataTable
-            headers={["Identifier", "Status", "Model Version", "Embedding Dimension", "Created At", "Actions"]}
-            rows={filteredTenants.map((tenant) => [
-              <Identifier key="id" title={tenant.name} subtitle={tenant.id} />,
-              <StatusPill key="status" status={tenant.status} />,
-              tenant.configs.MODEL_CONFIG.modelVersion,
-              tenant.configs.MODEL_CONFIG.embeddingDimension,
-              shortDate(tenant.createdAt),
-              <div className="tableActions" key="actions">
-                <button className="iconOnly" title="View tenant" onClick={() => openTenantEdit(tenant)}><Eye size={18} /></button>
-                <button className="iconOnly" title="Edit tenant" onClick={() => openTenantEdit(tenant)}><Edit3 size={18} /></button>
-                <button className="iconOnly dangerText" title="Deactivate tenant" onClick={() => void deactivateTenant(tenant)}><Trash2 size={18} /></button>
-                <button className="selectButton" onClick={() => void selectTenant(tenant)}><LogIn size={18} /> Select</button>
-              </div>
-            ])}
-            emptyText="No tenants found."
-          />
-        </section>
-
-        {tenantEditor && (
-          <section className="tableCard editorCard">
-            <div className="cardHeader">
-              <h2>{tenantEditor === "new" ? "Create Tenant" : "Tenant Detail"}</h2>
-              <button className="iconOnly" onClick={() => setTenantEditor(null)} title="Close"><X size={18} /></button>
-            </div>
-            <TenantConfigForm
-              tenantForm={tenantForm}
-              updateTenantForm={setTenantForm}
-              updateModel={updateModel}
-              updateLivenessChallenge={updateLivenessChallenge}
-            />
-            <div className="actions">
-              <button className="primaryButton" onClick={() => void saveTenant()}><Save size={16} /> Save Tenant</button>
-              {tenantEditor !== "new" && <button className="dangerButton" onClick={() => void deactivateTenant(tenantEditor)}><Trash2 size={16} /> Deactivate</button>}
-            </div>
-          </section>
-        )}
+          {error ? <div className="inlineNotice error">{error}</div> : <div className="inlineNotice"><Loader2 className="spin" size={16} /> Loading…</div>}
+          <button className="outlineButton loginButton" onClick={logout}><LogOut size={16} /> Sign out</button>
+        </div>
       </main>
     );
   }
@@ -837,7 +729,6 @@ export function App() {
           <SidebarButton active={section === "config"} icon={<Settings size={18} />} label="Tenant Config" onClick={() => setSection("config")} />
         </nav>
         <div className="sidebarFooter">
-          <button onClick={() => setSelectedTenant(null)}><Building2 size={18} /> Switch Tenant</button>
           <button onClick={logout}><LogOut size={18} /> Sign out</button>
         </div>
       </aside>
@@ -860,10 +751,7 @@ export function App() {
             clients={clients}
             events={events}
             setSection={setSection}
-            openTenantEdit={() => {
-              setSection("config");
-              setTenantEditor(null);
-            }}
+            openTenantEdit={() => setSection("config")}
           />
         )}
         {section === "users" && (
@@ -921,7 +809,6 @@ export function App() {
             />
             <div className="actions">
               <button className="primaryButton" onClick={() => void saveTenant()}><Save size={16} /> Save Tenant</button>
-              <button className="dangerButton" onClick={() => void deactivateTenant(selectedTenant)}><Trash2 size={16} /> Deactivate</button>
             </div>
           </section>
         )}

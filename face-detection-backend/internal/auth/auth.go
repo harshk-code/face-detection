@@ -155,8 +155,9 @@ func (m *Manager) RequireUserOrAdmin() gin.HandlerFunc {
 			forbidden(c, "token is not bound to a tenant")
 			return
 		}
-		// Enforce tenant isolation: ignore any client-supplied tenant header.
-		c.Request.Header.Set(headerTenant, claims.TenantID)
+		// Single-tenant deployment: tenant context is resolved server-side
+		// (tenantIDFromHeader returns the default tenant), so there is no
+		// per-request tenant header to override here.
 		c.Next()
 	}
 }

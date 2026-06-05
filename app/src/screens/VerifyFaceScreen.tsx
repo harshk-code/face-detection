@@ -30,6 +30,7 @@ type Phase = 'liveness' | 'matching';
 const CAMERA_SETTLE_MS = 500;
 const SAMPLE_DELAY_MS = 900;
 const RETRY_DELAY_MS = 1400;
+const MAX_LIVENESS_FRAMES = 40;
 
 // Head-turn liveness gate before a login match (turn to one side, back to centre).
 const VERIFY_LIVENESS_CONFIG: Partial<LivenessConfig> = {
@@ -133,6 +134,10 @@ export function VerifyFaceScreen({
       const landmarks = toMeshLandmarks(faceMesh);
       const ts = Date.now();
       framesRef.current.push({landmarks, ts});
+      // Bound the buffer so a long/failing liveness attempt can't grow it without limit.
+      if (framesRef.current.length > MAX_LIVENESS_FRAMES) {
+        framesRef.current = framesRef.current.slice(-MAX_LIVENESS_FRAMES);
+      }
       const update = engineRef.current.update(landmarks, ts);
       setProgress(update.progress);
 

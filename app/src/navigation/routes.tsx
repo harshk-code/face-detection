@@ -1,4 +1,5 @@
 import React from 'react';
+import {Alert} from 'react-native';
 import {CommonActions} from '@react-navigation/native';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 
@@ -10,7 +11,7 @@ import {OnboardFaceScreen} from '../screens/OnboardFaceScreen';
 import {OnboardUserFormScreen} from '../screens/OnboardUserFormScreen';
 import {ProfileScreen} from '../screens/ProfileScreen';
 import {VerifyFaceScreen} from '../screens/VerifyFaceScreen';
-import {logInfo} from '../utils/logError';
+import {logError, logInfo} from '../utils/logError';
 import {Screens} from './constants';
 
 import type {RootStackParamList} from './types';
@@ -77,19 +78,20 @@ export function OnboardFormRoute({navigation}: ScreenProps<'OnboardForm'>) {
       embedding={pendingEmbedding}
       onBack={() => navigation.goBack()}
       onSubmit={async template => {
-        await saveTemplate(template);
+        try {
+          await saveTemplate(template);
+        } catch (error) {
+          logError('app:onboard-template:save-failed', error);
+          Alert.alert(
+            'Could not save',
+            'We could not save your face data on this device. Please try again.',
+          );
+          return; // stay on the form; do not navigate on failure
+        }
         logInfo('app:onboard-template:navigate-home', {
           personnelId: template.personnelId,
         });
-        logInfo('app:onboard-template:navigate-home:scheduled', {
-          personnelId: template.personnelId,
-        });
-        runAfterFrame(() => {
-          logInfo('app:onboard-template:navigate-home:execute', {
-            personnelId: template.personnelId,
-          });
-          resetToRoute(navigation, Screens.Home);
-        });
+        runAfterFrame(() => resetToRoute(navigation, Screens.Home));
       }}
     />
   );

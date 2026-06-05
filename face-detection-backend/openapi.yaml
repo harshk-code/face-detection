@@ -1,12 +1,16 @@
 ---
 openapi: 3.0.3
 info:
-  title: Stage 1 Offline Face Auth Backend
+  title: Offline Face Auth Backend
   version: 1.0.0
-  description: Backend APIs for tenant, user, client onboarding, offline profile download,
-    event sync, purge acknowledgement, and admin demo views. Stage 1 has no authentication.
+  description: >-
+    Backend APIs for user/client onboarding, signed offline-profile download, event
+    sync, purge acknowledgement, and admin views. Single-tenant deployment: a default
+    tenant is seeded at startup and the x-tenant-id header is ignored. Management and
+    device routes require a JWT bearer token (admin token via POST /api/admin/login;
+    tenant-user token via POST /api/login) when AUTH_ENABLED=true (default).
 servers:
-- url: http://localhost:8080
+- url: http://localhost:18081
 tags:
 - name: Health
 - name: Tenants
