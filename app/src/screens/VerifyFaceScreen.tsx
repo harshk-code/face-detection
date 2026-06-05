@@ -18,11 +18,7 @@ type Props = {
   onBack: () => void;
 };
 
-type MatchDisplay = {
-  matched: boolean;
-  score: number;
-  threshold: number;
-} | null;
+type MatchDisplay = 'matched' | 'rejected' | null;
 
 const AUTO_CAPTURE_DELAY_MS = 900;
 const CAMERA_SETTLE_MS = 650;
@@ -107,17 +103,15 @@ export function VerifyFaceScreen({
       });
       const liveEmbedding = await generateFaceEmbedding(faceCrop);
       const result = matchFaceEmbedding(liveEmbedding.vector, localTemplate);
-      setMatchDisplay(result);
+      setMatchDisplay(result.matched ? 'matched' : 'rejected');
 
       if (result.matched) {
-        setToast(`Matched with ${formatPercent(result.score)} confidence`);
+        setToast('Face matched. Logging you in...');
         authenticated = true;
         return;
       }
 
-      setToast(
-        `Not matched because confidence was ${formatPercent(result.score)}`,
-      );
+      setToast('Face did not match. Please try again.');
       await delay(RETRY_DELAY_MS);
     } catch (captureError) {
       logError('VerifyFaceScreen.handleAutoCapture', captureError);
@@ -157,7 +151,7 @@ export function VerifyFaceScreen({
         <View
           style={[
             styles.statusCard,
-            matchDisplay?.matched
+            matchDisplay === 'matched'
               ? styles.statusMatched
               : matchDisplay
                 ? styles.statusRejected
@@ -166,8 +160,9 @@ export function VerifyFaceScreen({
           <Text style={styles.statusTitle}>{toast}</Text>
           {matchDisplay ? (
             <Text style={styles.statusMeta}>
-              Score {formatPercent(matchDisplay.score)} · Required{' '}
-              {formatPercent(matchDisplay.threshold)}
+              {matchDisplay === 'matched'
+                ? 'Authentication successful'
+                : 'Keep your face centered and try again'}
             </Text>
           ) : (
             <Text style={styles.statusMeta}>
@@ -178,10 +173,6 @@ export function VerifyFaceScreen({
       }
     />
   );
-}
-
-function formatPercent(value: number) {
-  return `${Math.round(value * 100)}%`;
 }
 
 function delay(durationMs: number) {
