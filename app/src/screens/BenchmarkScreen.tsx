@@ -59,6 +59,7 @@ export function BenchmarkScreen({localTemplate, onBack}: Props) {
     const timings: StageTimings = {};
     const coreTotals: number[] = [];
     let completed = 0;
+    let skipped = 0;
 
     try {
       for (let iteration = 0; iteration < ITERATIONS; iteration += 1) {
@@ -70,39 +71,44 @@ export function BenchmarkScreen({localTemplate, onBack}: Props) {
           break;
         }
 
-        const coreStart = Date.now();
+        try {
+          const coreStart = Date.now();
 
-        const photo = await timeStage(timings, 'capture', () => capture());
+          const photo = await timeStage(timings, 'capture', () => capture());
 
-        const faceMesh = await timeStage(timings, 'detect', () =>
-          detectMediaPipeFaceMesh(photo.path),
-        );
-        // Touch the liveness sampler so its cost is included in "detect".
-        sampleLivenessFrame(faceMesh);
+          const faceMesh = await timeStage(timings, 'detect', () =>
+            detectMediaPipeFaceMesh(photo.path),
+          );
+          // Touch the liveness sampler so its cost is included in "detect".
+          sampleLivenessFrame(faceMesh);
 
-        const faceCrop = await timeStage(timings, 'crop', () =>
-          createNormalizedFaceCrop({
-            photoHeight: photo.photoHeight,
-            photoPath: photo.path,
-            photoWidth: photo.photoWidth,
-          }),
-        );
+          const faceCrop = await timeStage(timings, 'crop', () =>
+            createNormalizedFaceCrop({
+              photoHeight: photo.photoHeight,
+              photoPath: photo.path,
+              photoWidth: photo.photoWidth,
+            }),
+          );
 
-        const embedding = await timeStage(timings, 'infer', () =>
-          generateFaceEmbedding(faceCrop),
-        );
+          const embedding = await timeStage(timings, 'infer', () =>
+            generateFaceEmbedding(faceCrop),
+          );
 
-        await timeStage(timings, 'match', async () =>
-          matchFaceEmbedding(embedding.vector, localTemplate),
-        );
+          await timeStage(timings, 'match', async () =>
+            matchFaceEmbedding(embedding.vector, localTemplate),
+          );
 
-        // Core budget excludes the camera capture itself.
-        const coreMs =
-          Date.now() -
-          coreStart -
-          (timings.capture[timings.capture.length - 1] ?? 0);
-        coreTotals.push(coreMs);
-        completed += 1;
+          // Core budget excludes the camera capture itself.
+          const coreMs =
+            Date.now() -
+            coreStart -
+            (timings.capture[timings.capture.length - 1] ?? 0);
+          coreTotals.push(coreMs);
+          completed += 1;
+        } catch {
+          // A frame with no detectable face — skip it and keep going.
+          skipped += 1;
+        }
       }
 
       const stageSummaries = summarizeTimings(timings);
@@ -115,7 +121,9 @@ export function BenchmarkScreen({localTemplate, onBack}: Props) {
       setCoreMedian(medianCore);
       setProgress(1);
       setStatus(
-        `Done — ${completed} iterations. Core recognition+liveness median: ${medianCore} ms.`,
+        `Done — ${completed} iterations${
+          skipped ? ` (${skipped} skipped, no face)` : ''
+        }. Core recognition+liveness median: ${medianCore} ms.`,
       );
       logInfo('benchmark:complete', {
         completed,

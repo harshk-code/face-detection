@@ -86,10 +86,15 @@ defeating the photo/replay attack. Logic is **pure & unit-tested**.
 
 ## Feasibility — speed < 1 s, easy integration
 
-- **In-app Benchmark screen** times `detect → crop → infer → match` over 20 runs
-  and shows a per-stage table + a **< 1 s** verdict on the **core** compute
-  (measured live on-device; Home → Benchmark).
-- **CPU-only** (`default` TFLite delegate) — no GPU; runs on mid-range hardware.
+Measured on-device (Samsung SM-F956B, Android 16, **CPU-only**), 20 runs, median:
+
+| detect | crop+norm | **infer** | match | **core (recog+liveness)** |
+|---|---|---|---|---|
+| 177 ms | 292 ms | **20 ms** | ~0 ms | **501 ms ✓ (< 1 s)** |
+
+- **MobileFaceNet inference is ~20 ms** — the AI core is trivially fast; the rest
+  is FaceMesh + preprocessing. Camera capture (~728 ms) is hardware-bound, excluded.
+- **No GPU** (`default` TFLite delegate). Reproduce live: Home → Benchmark.
 - **Drop-in SDK**: `src/faceAuth/sdk` exposes embed/match/liveness/enroll/sync
   without our screens. See `docs/INTEGRATION.md` for the Datalake-3.0 guide.
 

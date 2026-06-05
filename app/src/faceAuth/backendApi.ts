@@ -5,7 +5,11 @@ import {FACE_AUTH_CONFIG} from './modelConfig';
 import type {FaceTemplate} from './types';
 import {logError, logInfo} from '../utils/logError';
 
-const API_BASE_URL = 'https://c24-bff-service-stage.qac24svc.dev/';
+// Dev builds talk to the local Go backend (reach it from the device with
+// `adb reverse tcp:18081 tcp:18081`); release builds use the staging gateway.
+const API_BASE_URL = __DEV__
+  ? 'http://localhost:18081/'
+  : 'https://c24-bff-service-stage.qac24svc.dev/';
 const TENANT_ID = 'Cars24';
 
 type UserOnboardingResponse = {
