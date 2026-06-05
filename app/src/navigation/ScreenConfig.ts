@@ -5,6 +5,7 @@ import {
   HomeRoute,
   IntroRoute,
   LoginRoute,
+  NetworkLoggerRoute,
   OnboardFormRoute,
   OnboardScanRoute,
   ProfileRoute,
@@ -21,6 +22,15 @@ export interface RootScreenConfigItem<
   name: Name;
   options?: NativeStackNavigationOptions;
 }
+
+const DEV_SCREENS_CONFIG: RootScreenConfigItem[] = __DEV__
+  ? [
+      {
+        name: Screens.NetworkLogger,
+        component: NetworkLoggerRoute,
+      },
+    ]
+  : [];
 
 export const ROOT_SCREENS_CONFIG: RootScreenConfigItem[] = [
   {
@@ -51,4 +61,5 @@ export const ROOT_SCREENS_CONFIG: RootScreenConfigItem[] = [
     name: Screens.SyncStatus,
     component: SyncStatusRoute,
   },
+  ...DEV_SCREENS_CONFIG,
 ];

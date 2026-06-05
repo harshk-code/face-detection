@@ -5,11 +5,13 @@ import { enableScreens } from 'react-native-screens';
 
 import { FaceAuthProvider, useFaceAuth } from './src/app/FaceAuthContext';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
+import { startDevNetworkLogger } from './src/dev/networkLogger';
 import { AppNavigator } from './src/navigation/AppNavigator';
 import { LoadingScreen } from './src/screens/LoadingScreen';
 import { traceNative } from './src/utils/nativeTrace';
 
 enableScreens(true);
+startDevNetworkLogger();
 
 function App() {
   traceNative('app-render', {});

@@ -12,9 +12,7 @@ import {
   clearSyncQueue,
   enqueueRegisterUserJob,
 } from '../faceAuth/syncQueueStore';
-import {
-  processSyncQueue,
-} from '../faceAuth/syncQueueProcessor';
+import {processSyncQueue} from '../faceAuth/syncQueueProcessor';
 import {
   clearStoredFaceTemplate,
   getStoredFaceTemplate,
@@ -29,6 +27,18 @@ import {logError, logInfo} from '../utils/logError';
 import {traceNative} from '../utils/nativeTrace';
 
 type CameraPurpose = 'login' | 'onboarding';
+
+type NetInfoState = {
+  isConnected: boolean | null;
+  isInternetReachable: boolean | null;
+  type: string;
+};
+
+type NetInfoModule = {
+  addEventListener: (
+    listener: (state: NetInfoState) => void,
+  ) => () => void;
+};
 
 type FaceAuthContextValue = {
   clearTemplateData: () => Promise<void>;
@@ -103,6 +113,38 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
       clearInterval(interval);
       subscription.remove();
     };
+  }, [isHydrated, processQueueAndRefreshTemplate]);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return undefined;
+    }
+
+    const netInfo = getNetInfoModule();
+    if (!netInfo) {
+      logInfo('app:network-state:unavailable', {
+        reason: 'netinfo-module-not-installed',
+      });
+      return undefined;
+    }
+
+    const unsubscribe = netInfo.addEventListener(state => {
+      const isOnline =
+        state.isConnected === true && state.isInternetReachable !== false;
+
+      logInfo('app:network-state', {
+        isConnected: state.isConnected,
+        isInternetReachable: state.isInternetReachable,
+        isOnline,
+        type: state.type,
+      });
+
+      if (isOnline) {
+        void processQueueAndRefreshTemplate('network-restored');
+      }
+    });
+
+    return unsubscribe;
   }, [isHydrated, processQueueAndRefreshTemplate]);
 
   useEffect(() => {
@@ -273,6 +315,14 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
       {children}
     </FaceAuthContext.Provider>
   );
+}
+
+function getNetInfoModule(): NetInfoModule | null {
+  try {
+    return require('@react-native-community/netinfo').default as NetInfoModule;
+  } catch {
+    return null;
+  }
 }
 
 export function useFaceAuth() {

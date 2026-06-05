@@ -6,6 +6,7 @@ import {useFaceAuth} from '../app/FaceAuthContext';
 import {LoadingScreen} from '../screens/LoadingScreen';
 import {HomeScreen} from '../screens/HomeScreen';
 import {IntroScreen} from '../screens/IntroScreen';
+import {NetworkLoggerScreen} from '../screens/NetworkLoggerScreen';
 import {OnboardFaceScreen} from '../screens/OnboardFaceScreen';
 import {OnboardUserFormScreen} from '../screens/OnboardUserFormScreen';
 import {ProfileScreen} from '../screens/ProfileScreen';
@@ -144,6 +145,13 @@ export function HomeRoute({navigation}: ScreenProps<'Home'>) {
       onSyncStatus={() => {
         navigation.navigate(Screens.SyncStatus);
       }}
+      onNetworkLogger={
+        __DEV__
+          ? () => {
+              navigation.navigate(Screens.NetworkLogger);
+            }
+          : undefined
+      }
       onUpdateOnboarding={async () => {
         const canContinue = await prepareOnboarding();
         if (canContinue) {
@@ -201,6 +209,23 @@ export function SyncStatusRoute({navigation}: ScreenProps<'SyncStatus'>) {
         } finally {
           setIsProcessing(false);
         }
+      }}
+    />
+  );
+}
+
+export function NetworkLoggerRoute({
+  navigation,
+}: ScreenProps<'NetworkLogger'>) {
+  return (
+    <NetworkLoggerScreen
+      onBack={() => {
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+          return;
+        }
+
+        navigation.navigate(Screens.Home);
       }}
     />
   );

@@ -7,7 +7,7 @@ import {
 } from '../native/FaceTemplateStore';
 import {logError, logInfo} from '../utils/logError';
 
-export type SyncJobStatus = 'pending' | 'syncing' | 'synced';
+export type SyncJobStatus = 'failed' | 'pending' | 'syncing' | 'synced';
 
 export type SyncJobType =
   | 'AUTH_EVENT'
@@ -149,7 +149,7 @@ export async function markSyncJobPending(jobId: string, error: unknown) {
   await updateSyncJob(jobId, job => ({
     ...job,
     lastError: normalizeError(error),
-    status: 'pending',
+    status: 'failed',
     updatedAt: new Date().toISOString(),
   }));
 }
@@ -208,7 +208,7 @@ async function readSyncQueue() {
           ? {
               ...job,
               lastError: job.lastError ?? 'App closed while sync was running.',
-              status: 'pending',
+              status: 'failed',
             }
           : job,
       ),

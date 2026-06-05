@@ -5,15 +5,23 @@ import {FACE_AUTH_CONFIG} from './modelConfig';
 import type {FaceTemplate} from './types';
 import {logError, logInfo} from '../utils/logError';
 
-const API_BASE_URL = 'https://api.cars24.com/gw/plt/bffsvc';
+const API_BASE_URL = 'https://c24-bff-service-stage.qac24svc.dev/';
 const TENANT_ID = 'Cars24';
 
 type UserOnboardingResponse = {
+  data?: {
+    id?: string;
+    userId?: string;
+  };
   id?: string;
   userId?: string;
 };
 
 type ClientRegistrationResponse = {
+  data?: {
+    clientId?: string;
+    id?: string;
+  };
   clientId?: string;
   id?: string;
 };
@@ -61,7 +69,11 @@ export async function registerBackendUser(template: FaceTemplate) {
     app: await getAppPayload(),
   });
 
-  const backendUserId = userResponse.id ?? userResponse.userId;
+  const backendUserId =
+    userResponse.id ??
+    userResponse.userId ??
+    userResponse.data?.id ??
+    userResponse.data?.userId;
   if (!backendUserId) {
     throw new Error('Backend onboarding response did not include user id.');
   }
@@ -81,7 +93,11 @@ export async function registerBackendClient(userId: string) {
     },
   );
 
-  const backendClientId = clientResponse.clientId ?? clientResponse.id;
+  const backendClientId =
+    clientResponse.clientId ??
+    clientResponse.id ??
+    clientResponse.data?.clientId ??
+    clientResponse.data?.id;
   if (!backendClientId) {
     throw new Error('Backend client response did not include client id.');
   }
@@ -108,11 +124,14 @@ export async function postAuthEvent(
 }
 
 async function postJson<ResponseBody>(path: string, body: unknown) {
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+
   logInfo('backend:request', {
     path,
+    url,
   });
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(url, {
     body: JSON.stringify(body),
     headers: {
       'Content-Type': 'application/json',
@@ -121,16 +140,27 @@ async function postJson<ResponseBody>(path: string, body: unknown) {
     method: 'POST',
   });
 
+  if (!response.ok) {
+    const responseText = await response.text();
+    logError('backend:request:failed', {
+      path,
+      responseText,
+      status: response.status,
+    });
+    throw new Error(
+      `Backend request failed ${response.status}: ${responseText}`,
+    );
+  }
+
   const responseText = await response.text();
   const responseBody = responseText
     ? (JSON.parse(responseText) as ResponseBody)
     : ({} as ResponseBody);
 
-  if (!response.ok) {
-    throw new Error(
-      `Backend request failed ${response.status}: ${responseText}`,
-    );
-  }
+  logInfo('backend:request:success', {
+    path,
+    status: response.status,
+  });
 
   return responseBody;
 }

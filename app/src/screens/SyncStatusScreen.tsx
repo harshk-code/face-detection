@@ -120,6 +120,8 @@ function JobCard({job}: {job: SyncQueueJob}) {
               ? styles.statusSynced
               : job.status === 'syncing'
                 ? styles.statusSyncing
+                : job.status === 'failed'
+                  ? styles.statusFailed
                 : styles.statusPending,
           ]}>
           {job.status.toUpperCase()}
@@ -244,6 +246,10 @@ const styles = StyleSheet.create({
   statusPending: {
     backgroundColor: '#fff4d9',
     color: '#9a6400',
+  },
+  statusFailed: {
+    backgroundColor: '#fee4e2',
+    color: '#b42318',
   },
   statusPill: {
     borderRadius: 8,

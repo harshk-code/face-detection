@@ -2,6 +2,7 @@ export const ROOT_STACK_SCREENS = {
   Home: 'Home',
   Intro: 'Intro',
   Login: 'Login',
+  NetworkLogger: 'NetworkLogger',
   OnboardForm: 'OnboardForm',
   OnboardScan: 'OnboardScan',
   Profile: 'Profile',
