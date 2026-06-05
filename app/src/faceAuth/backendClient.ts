@@ -20,13 +20,19 @@ export async function postBackendJson<ResponseBody>(
   });
 
   const responseText = await response.text();
-  const responseBody = responseText
-    ? (JSON.parse(responseText) as ResponseBody)
-    : ({} as ResponseBody);
-
   if (!response.ok) {
-    throw new Error(`Backend request failed ${response.status}: ${responseText}`);
+    throw new Error(
+      `Backend request failed ${response.status}: ${responseText.slice(0, 200)}`,
+    );
   }
-
-  return responseBody;
+  if (!responseText) {
+    return {} as ResponseBody;
+  }
+  try {
+    return JSON.parse(responseText) as ResponseBody;
+  } catch {
+    throw new Error(
+      `Backend returned non-JSON (${response.status}): ${responseText.slice(0, 200)}`,
+    );
+  }
 }

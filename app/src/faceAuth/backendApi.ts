@@ -98,7 +98,12 @@ export async function registerOnboardingAndClient(
       backendUserId,
     };
   } catch (error) {
-    logError('backend:onboarding-sync:error', error);
+    // Best-effort, fire-and-forget: onboarding succeeds locally even if the
+    // backend is unreachable/misconfigured. Logged at info level so a failed
+    // sync does not raise an alarming dev warning badge.
+    logInfo('backend:onboarding-sync:skipped', {
+      reason: error instanceof Error ? error.message : 'unknown',
+    });
     return null;
   }
 }
@@ -148,17 +153,21 @@ async function postJson<ResponseBody>(path: string, body: unknown) {
   });
 
   const responseText = await response.text();
-  const responseBody = responseText
-    ? (JSON.parse(responseText) as ResponseBody)
-    : ({} as ResponseBody);
-
   if (!response.ok) {
     throw new Error(
-      `Backend request failed ${response.status}: ${responseText}`,
+      `Backend request failed ${response.status}: ${responseText.slice(0, 200)}`,
     );
   }
-
-  return responseBody;
+  if (!responseText) {
+    return {} as ResponseBody;
+  }
+  try {
+    return JSON.parse(responseText) as ResponseBody;
+  } catch {
+    throw new Error(
+      `Backend returned non-JSON (${response.status}): ${responseText.slice(0, 200)}`,
+    );
+  }
 }
 
 async function getAppPayload() {
