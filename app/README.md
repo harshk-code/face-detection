@@ -1,5 +1,36 @@
 This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
 
+# Offline Face Auth — architecture
+
+On-device face recognition (MobileFaceNet ArcFace via TFLite) + liveness, with a
+crash-safe offline sync to the backend. Core logic lives in `src/faceAuth/` and
+is unit-tested without a device (`yarn test`, 35 tests).
+
+- **Recognition** — `embeddingModel.ts` (512-d TFLite), `matching.ts`
+  (`matchFaceEmbedding` 1:1, `identifyFace` 1:N with an anti-look-alike margin).
+- **Liveness** — `liveness/geometry.ts` (EAR / smile / yaw from MediaPipe
+  FaceMesh) + `liveness/engine.ts` (randomized blink/smile/head-turn challenge
+  state machine; defeats print/replay spoofs).
+- **Enrollment** — `enrollment.ts` averages several quality-gated frames into one
+  robust template.
+- **Offline sync (ACK-before-purge)** — `syncQueue.ts` durably queues auth
+  events, retries, dedupes by `eventId`, and only deletes a local event after the
+  backend acknowledges a purge (`/sync/events` → `/sync/purge-ack`). Wired via
+  `authEventQueue.ts`; flushes leftover events on app start.
+- **Encryption at rest** — biometric templates and the event queue are stored in
+  Android `EncryptedSharedPreferences` (Keystore) and iOS Keychain, not plaintext.
+
+> **iOS native note:** `ios/MorthHackathon/EventQueueStore.swift` and
+> `EventQueueStoreBridge.m` are new — add them to the Xcode target so the encrypted
+> event queue persists on iOS. Until then the queue falls back to in-memory on iOS
+> (Android is fully wired). Run `bundle exec pod install` after pulling.
+
+Run the tests:
+
+```sh
+yarn test
+```
+
 # Getting Started
 
 > **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
