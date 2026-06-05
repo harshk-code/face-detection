@@ -2,15 +2,20 @@ import React, {useCallback, useEffect, useRef, useState} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 
 import {CaptureScreen} from '../components/CaptureScreen';
-import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
-import {matchFaceEmbedding} from '../faceAuth/matching';
-import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
 import {syncAuthEventFireAndForget} from '../faceAuth/backendApi';
+import {LivenessEngine, type LivenessConfig} from '../faceAuth/liveness/engine';
+import type {MeshLandmarks} from '../faceAuth/liveness/geometry';
+import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
+import {FaceAuth, TfliteEmbedder, type LivenessFrame} from '../faceAuth/sdk';
 import type {
   CapturedFacePhoto,
   DetectedFaceSnapshot,
   FaceTemplate,
 } from '../faceAuth/types';
+import {
+  detectMediaPipeFaceMesh,
+  type MediaPipeFaceMeshResult,
+} from '../native/MediaPipeFaceMesh';
 import {logError, logInfo} from '../utils/logError';
 
 type Props = {
@@ -20,33 +25,64 @@ type Props = {
 };
 
 type MatchDisplay = 'matched' | 'rejected' | null;
+type Phase = 'liveness' | 'matching';
 
-const AUTO_CAPTURE_DELAY_MS = 900;
-const CAMERA_SETTLE_MS = 650;
+const CAMERA_SETTLE_MS = 500;
+const SAMPLE_DELAY_MS = 900;
 const RETRY_DELAY_MS = 1400;
+
+// Head-turn liveness gate before a login match (turn to one side, back to centre).
+const VERIFY_LIVENESS_CONFIG: Partial<LivenessConfig> = {
+  windowMs: 20000,
+  maxAttempts: 3,
+  yawTurn: 0.08,
+  yawCenter: 0.05,
+};
+
+function toMeshLandmarks(faceMesh: MediaPipeFaceMeshResult): MeshLandmarks {
+  const map: MeshLandmarks = {};
+  for (const landmark of faceMesh.landmarks) {
+    map[landmark.index] = {x: landmark.x, y: landmark.y, z: landmark.z};
+  }
+  return map;
+}
 
 export function VerifyFaceScreen({
   localTemplate,
   onAuthenticated,
   onBack,
 }: Props) {
-  const autoCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-  const isCaptureInFlightRef = useRef(false);
+  const sampleTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isInFlightRef = useRef(false);
   const latestFaceRef = useRef<DetectedFaceSnapshot | null>(null);
   const capturePhotoRef = useRef<(() => Promise<CapturedFacePhoto>) | null>(
     null,
   );
+  const engineRef = useRef(new LivenessEngine(VERIFY_LIVENESS_CONFIG));
+  const framesRef = useRef<LivenessFrame[]>([]);
+  const faceAuthRef = useRef(
+    new FaceAuth({
+      embedder: new TfliteEmbedder(),
+      livenessConfig: VERIFY_LIVENESS_CONFIG,
+      matcherThreshold: localTemplate.threshold,
+    }),
+  );
+  const startedAtRef = useRef(0);
+
   const [isFaceDetected, setIsFaceDetected] = useState(false);
-  const [isCapturing, setIsCapturing] = useState(false);
+  const [isBusy, setIsBusy] = useState(false);
+  const [phase, setPhase] = useState<Phase>('liveness');
+  const [progress, setProgress] = useState(0);
+  const [score, setScore] = useState<number | null>(null);
   const [matchDisplay, setMatchDisplay] = useState<MatchDisplay>(null);
-  const [toast, setToast] = useState('Look at the camera');
+  const [toast, setToast] = useState('Turn your head, then look at the camera');
 
   useEffect(() => {
+    engineRef.current.issueChallenge('HEAD_TURN');
+    startedAtRef.current = Date.now();
     return () => {
-      if (autoCaptureTimeoutRef.current) {
-        clearTimeout(autoCaptureTimeoutRef.current);
+      if (sampleTimeoutRef.current) {
+        clearTimeout(sampleTimeoutRef.current);
       }
     };
   }, []);
@@ -59,80 +95,131 @@ export function VerifyFaceScreen({
   );
 
   useEffect(() => {
-    if (!isFaceDetected || isCapturing || isCaptureInFlightRef.current) {
+    if (!isFaceDetected || isBusy || isInFlightRef.current) {
       return;
     }
-
-    setToast('Face detected. Matching...');
-    autoCaptureTimeoutRef.current = setTimeout(() => {
-      void handleAutoCapture();
-    }, AUTO_CAPTURE_DELAY_MS);
-
+    sampleTimeoutRef.current = setTimeout(() => {
+      void handleSample();
+    }, SAMPLE_DELAY_MS);
     return () => {
-      if (autoCaptureTimeoutRef.current) {
-        clearTimeout(autoCaptureTimeoutRef.current);
+      if (sampleTimeoutRef.current) {
+        clearTimeout(sampleTimeoutRef.current);
       }
     };
-    // handleAutoCapture intentionally reads refs and stable props.
+    // handleSample reads refs and stable props.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCapturing, isFaceDetected]);
+  }, [isBusy, isFaceDetected]);
 
-  async function handleAutoCapture() {
-    if (isCaptureInFlightRef.current) {
+  function scheduleNext(delayMs: number) {
+    if (sampleTimeoutRef.current) {
+      clearTimeout(sampleTimeoutRef.current);
+    }
+    sampleTimeoutRef.current = setTimeout(() => {
+      void handleSample();
+    }, delayMs);
+  }
+
+  async function handleSample() {
+    if (isInFlightRef.current) {
       return;
     }
-
-    isCaptureInFlightRef.current = true;
-    setIsCapturing(true);
+    isInFlightRef.current = true;
+    setIsBusy(true);
     let authenticated = false;
-    const startedAt = Date.now();
 
     try {
-      setMatchDisplay(null);
       await delay(CAMERA_SETTLE_MS);
-
       if (!capturePhotoRef.current) {
         throw new Error('Camera is not ready yet. Please try again.');
       }
+      const photo = await capturePhotoRef.current();
 
-      const {path, photoHeight, photoWidth} = await capturePhotoRef.current();
+      // Phase 1: gather head-turn liveness frames until the engine passes.
+      const faceMesh = await detectMediaPipeFaceMesh(photo.path);
+      const landmarks = toMeshLandmarks(faceMesh);
+      const ts = Date.now();
+      framesRef.current.push({landmarks, ts});
+      const update = engineRef.current.update(landmarks, ts);
+      setProgress(update.progress);
 
+      if (!update.passed) {
+        if (update.state === 'FAILED') {
+          engineRef.current.issueChallenge('HEAD_TURN');
+          framesRef.current = [];
+          setProgress(0);
+          setToast("Let's try again — turn your head, then back to centre");
+        } else {
+          setToast('Turn your head to one side, then back to centre');
+        }
+        await delay(0);
+        scheduleNext(SAMPLE_DELAY_MS);
+        return;
+      }
+
+      // Phase 2: liveness passed — run recognition via the SDK facade.
+      setPhase('matching');
+      setToast('Liveness verified. Matching...');
       const faceCrop = await createNormalizedFaceCrop({
         detectedFace: latestFaceRef.current,
-        photoHeight,
-        photoPath: path,
-        photoWidth,
+        photoHeight: photo.photoHeight,
+        photoPath: photo.path,
+        photoWidth: photo.photoWidth,
       });
-      const liveEmbedding = await generateFaceEmbedding(faceCrop);
-      const result = matchFaceEmbedding(liveEmbedding.vector, localTemplate);
+
+      const outcome = await faceAuthRef.current.authenticate({
+        templateEmbedding: localTemplate.embedding,
+        threshold: localTemplate.threshold,
+        challenge: 'HEAD_TURN',
+        frames: framesRef.current,
+        sample: {crop: faceCrop},
+      });
+      setScore(outcome.score);
+
       syncAuthEventFireAndForget({
         capturedAt: new Date().toISOString(),
-        latencyMs: Date.now() - startedAt,
-        matchResult: result,
+        latencyMs: Date.now() - startedAtRef.current,
+        matchResult: {
+          matched: outcome.matched,
+          score: outcome.score,
+          threshold: localTemplate.threshold,
+        },
         template: localTemplate,
+        livenessPassed: outcome.livenessPassed,
+        challengeTypes: [outcome.challenge],
       });
-      setMatchDisplay(result.matched ? 'matched' : 'rejected');
+      logInfo('face-auth:verify:outcome', {
+        matched: outcome.matched,
+        reason: outcome.reason,
+        score: Number(outcome.score.toFixed(4)),
+      });
 
-      if (result.matched) {
+      setMatchDisplay(outcome.matched ? 'matched' : 'rejected');
+      if (outcome.matched) {
         setToast('Face matched. Logging you in...');
         authenticated = true;
         return;
       }
 
+      // Reset for another attempt.
       setToast('Face did not match. Please try again.');
+      engineRef.current.issueChallenge('HEAD_TURN');
+      framesRef.current = [];
+      setPhase('liveness');
+      setProgress(0);
       await delay(RETRY_DELAY_MS);
+      scheduleNext(SAMPLE_DELAY_MS);
     } catch (captureError) {
-      logError('VerifyFaceScreen.handleAutoCapture', captureError);
+      logError('VerifyFaceScreen.handleSample', captureError);
       setToast(
         captureError instanceof Error
           ? captureError.message
           : 'Unable to match face.',
       );
       await delay(RETRY_DELAY_MS);
+      scheduleNext(SAMPLE_DELAY_MS);
     } finally {
-      setIsCapturing(false);
-      isCaptureInFlightRef.current = false;
-
+      setIsBusy(false);
+      isInFlightRef.current = false;
       if (authenticated) {
         onAuthenticated();
       }
@@ -142,11 +229,11 @@ export function VerifyFaceScreen({
   return (
     <CaptureScreen
       title="Login"
-      subtitle="Face match starts automatically"
+      subtitle="Liveness + face match start automatically"
       primaryLabel="Matching"
       enableLiveFaceDetector={false}
       primaryVisible={false}
-      isBusy={isCapturing}
+      isBusy={isBusy}
       isFaceDetected={isFaceDetected}
       onBack={onBack}
       onCapture={() => undefined}
@@ -165,16 +252,28 @@ export function VerifyFaceScreen({
                 ? styles.statusRejected
                 : null,
           ]}>
+          <Text style={styles.statusLabel}>
+            {phase === 'matching' ? 'Recognition' : 'Liveness check · head turn'}
+          </Text>
           <Text style={styles.statusTitle}>{toast}</Text>
-          {matchDisplay ? (
+          {phase === 'liveness' && !matchDisplay ? (
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {width: `${Math.round(Math.min(1, progress) * 100)}%`},
+                ]}
+              />
+            </View>
+          ) : null}
+          {score !== null ? (
             <Text style={styles.statusMeta}>
-              {matchDisplay === 'matched'
-                ? 'Authentication successful'
-                : 'Keep your face centered and try again'}
+              Match score {(score * 100).toFixed(1)}% · threshold{' '}
+              {(localTemplate.threshold * 100).toFixed(0)}%
             </Text>
           ) : (
             <Text style={styles.statusMeta}>
-              Waiting for a clear face to compare with {localTemplate.personnelId}
+              Verifying against {localTemplate.personnelId}
             </Text>
           )}
         </View>
@@ -198,7 +297,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.18)',
     backgroundColor: 'rgba(0, 0, 0, 0.36)',
     padding: 12,
-    gap: 4,
+    gap: 6,
   },
   statusMatched: {
     borderColor: 'rgba(110, 231, 168, 0.55)',
@@ -207,6 +306,12 @@ const styles = StyleSheet.create({
   statusRejected: {
     borderColor: 'rgba(255, 180, 180, 0.55)',
     backgroundColor: 'rgba(127, 29, 29, 0.58)',
+  },
+  statusLabel: {
+    color: '#d7dde8',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
   },
   statusTitle: {
     color: '#ffffff',
@@ -219,5 +324,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     textAlign: 'center',
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#4f9dff',
   },
 });

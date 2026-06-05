@@ -4,6 +4,8 @@ import {StyleSheet, Text, View} from 'react-native';
 import {CaptureScreen} from '../components/CaptureScreen';
 import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
 import {averageEmbeddings} from '../faceAuth/enrollment';
+import {LivenessEngine, type LivenessConfig} from '../faceAuth/liveness/engine';
+import type {MeshLandmarks} from '../faceAuth/liveness/geometry';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
 import type {CapturedFacePhoto, FaceEmbedding} from '../faceAuth/types';
 import {
@@ -18,11 +20,8 @@ type Props = {
   onFaceDataReady: (embedding: FaceEmbedding) => void;
 };
 
-type LivenessStep = 'turn-first' | 'turn-opposite' | 'capture-face';
+type LivenessStep = 'liveness' | 'capture-face';
 
-const HEAD_TURN_THRESHOLD_RATIO = 0.07;
-const OPPOSITE_POSE_DELTA_RATIO = 0.06;
-const OPPOSITE_FACE_CENTER_DELTA_RATIO = 0.025;
 const FIRST_AUTO_CAPTURE_DELAY_MS = 850;
 const AUTO_CAPTURE_RETRY_DELAY_MS = 1050;
 const NEXT_STEP_DELAY_MS = 650;
@@ -31,30 +30,50 @@ const ENROLL_FRAME_COUNT = 3;
 const MIN_ENROLL_FRAMES = 2;
 const ENROLL_FRAME_GAP_MS = 180;
 
+// Liveness tuned for the still-capture cadence (frames arrive ~1s apart, so the
+// window is generous). HEAD_TURN: turn to one side, then return to centre.
+const ONBOARD_LIVENESS_CONFIG: Partial<LivenessConfig> = {
+  windowMs: 30000,
+  maxAttempts: 3,
+  yawTurn: 0.08,
+  yawCenter: 0.05,
+};
+
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-type HeadTurnResult = ReturnType<typeof evaluateHeadTurn>;
+function toMeshLandmarks(faceMesh: MediaPipeFaceMeshResult): MeshLandmarks {
+  const map: MeshLandmarks = {};
+  for (const landmark of faceMesh.landmarks) {
+    map[landmark.index] = {x: landmark.x, y: landmark.y, z: landmark.z};
+  }
+  return map;
+}
 
 export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
   traceNative('onboard-screen-render', {});
   const autoCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const firstTurnSignRef = useRef<number | null>(null);
-  const firstTurnPoseRef = useRef<HeadTurnResult | null>(null);
+  const livenessEngineRef = useRef<LivenessEngine | null>(null);
   const isMountedRef = useRef(true);
   const isCaptureInFlightRef = useRef(false);
   const isCompletedRef = useRef(false);
-  const stepRef = useRef<LivenessStep>('turn-first');
+  const stepRef = useRef<LivenessStep>('liveness');
   const capturePhotoRef = useRef<(() => Promise<CapturedFacePhoto>) | null>(
     null,
   );
   const [cameraActive, setCameraActive] = useState(true);
   const [isBusy, setIsBusy] = useState(false);
-  const [status, setStatus] = useState('Turn your head slightly to one side');
+  const [status, setStatus] = useState(
+    'Turn your head to one side, then back to centre',
+  );
+  const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const engine = new LivenessEngine(ONBOARD_LIVENESS_CONFIG);
+    engine.issueChallenge('HEAD_TURN');
+    livenessEngineRef.current = engine;
     scheduleAutoCapture(FIRST_AUTO_CAPTURE_DELAY_MS);
 
     return () => {
@@ -149,89 +168,43 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
       }
 
       const faceMesh = await detectMediaPipeFaceMesh(path);
-      const headTurn = evaluateHeadTurn(faceMesh);
-      logInfo('face-auth:liveness:head-turn', {
-        firstTurnSign: firstTurnSignRef.current,
-        firstTurnYawOffsetRatio:
-          firstTurnPoseRef.current?.yawOffsetRatio ?? null,
-        landmarkCount: faceMesh.landmarks.length,
-        mediaPipeBounds: faceMesh.bounds,
-        mediaPipeImageHeight: faceMesh.imageHeight,
-        mediaPipeImageWidth: faceMesh.imageWidth,
-        requiredAbsYawOffsetRatio: HEAD_TURN_THRESHOLD_RATIO,
-        requiredFaceCenterDeltaRatio: OPPOSITE_FACE_CENTER_DELTA_RATIO,
-        requiredYawDeltaRatio: OPPOSITE_POSE_DELTA_RATIO,
-        ...headTurn,
-        step: currentStep,
-      });
-
-      if (!headTurn.passed) {
-        logInfo('face-auth:liveness:turn-too-small', {
-          requiredAbsYawOffsetRatio: HEAD_TURN_THRESHOLD_RATIO,
-          step: currentStep,
-          yawOffsetRatio: headTurn.yawOffsetRatio,
-        });
-        setStatus(
-          currentStep === 'turn-first'
-            ? 'Tilt your head slightly left or right'
-            : 'Now tilt slightly to the other side',
-        );
-        setError('Keep your face inside the frame');
+      const landmarks = toMeshLandmarks(faceMesh);
+      const engine = livenessEngineRef.current;
+      if (!engine) {
         scheduleAutoCapture(AUTO_CAPTURE_RETRY_DELAY_MS);
         return;
       }
 
-      if (currentStep === 'turn-first') {
-        firstTurnSignRef.current = headTurn.sign;
-        firstTurnPoseRef.current = headTurn;
-        logInfo('face-auth:liveness:first-turn-recorded', {
-          faceCenterX: headTurn.faceCenterX,
-          normalizedFaceCenterX: headTurn.normalizedFaceCenterX,
-          recordedSign: headTurn.sign,
-          yawOffset: headTurn.yawOffset,
-          yawOffsetRatio: headTurn.yawOffsetRatio,
-        });
-        setStepValue('turn-opposite');
-        setStatus('Good. Now move slightly to the other side');
+      const update = engine.update(landmarks, Date.now());
+      setProgress(update.progress);
+      logInfo('face-auth:liveness:update', {
+        challenge: update.challenge,
+        landmarkCount: faceMesh.landmarks.length,
+        passed: update.passed,
+        progress: Number(update.progress.toFixed(2)),
+        state: update.state,
+      });
+
+      if (update.passed) {
+        setStepValue('capture-face');
+        setStatus('Liveness verified. Capturing face data...');
+        setError(null);
         scheduleAutoCapture(NEXT_STEP_DELAY_MS);
         return;
       }
 
-      const oppositeTurn = evaluateOppositeTurn(
-        firstTurnPoseRef.current,
-        headTurn,
-      );
-
-      if (!oppositeTurn.passed) {
-        logInfo('face-auth:liveness:opposite-turn-rejected', {
-          ...oppositeTurn,
-          currentSign: headTurn.sign,
-          firstTurnSign: firstTurnSignRef.current,
-          firstTurnYawOffsetRatio:
-            firstTurnPoseRef.current?.yawOffsetRatio ?? null,
-          requiredFaceCenterDeltaRatio: OPPOSITE_FACE_CENTER_DELTA_RATIO,
-          requiredYawDeltaRatio: OPPOSITE_POSE_DELTA_RATIO,
-          yawOffset: headTurn.yawOffset,
-          yawOffsetRatio: headTurn.yawOffsetRatio,
-        });
-        setStatus('Turn slightly in the opposite direction');
-        setError('Small movement is enough. Keep your face steady.');
+      if (update.state === 'FAILED') {
+        engine.issueChallenge('HEAD_TURN');
+        setProgress(0);
+        setStatus("Let's try the liveness check again");
+        setError('Turn your head to one side, then back to centre');
         scheduleAutoCapture(AUTO_CAPTURE_RETRY_DELAY_MS);
         return;
       }
 
-      logInfo('face-auth:liveness:opposite-turn-recorded', {
-        ...oppositeTurn,
-        currentSign: headTurn.sign,
-        firstTurnSign: firstTurnSignRef.current,
-        requiredFaceCenterDeltaRatio: OPPOSITE_FACE_CENTER_DELTA_RATIO,
-        requiredYawDeltaRatio: OPPOSITE_POSE_DELTA_RATIO,
-        yawOffset: headTurn.yawOffset,
-        yawOffsetRatio: headTurn.yawOffsetRatio,
-      });
-      setStepValue('capture-face');
-      setStatus('Liveness verified. Capturing face data...');
-      scheduleAutoCapture(NEXT_STEP_DELAY_MS);
+      setStatus('Turn your head to one side, then back to centre');
+      setError(null);
+      scheduleAutoCapture(AUTO_CAPTURE_RETRY_DELAY_MS);
     } catch (onboardError) {
       logWarning('OnboardFaceScreen.handlePrimaryAction', onboardError);
       setStatus('Keep your face centered in the frame');
@@ -271,8 +244,20 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
       onFaceSnapshotChange={() => undefined}
       secondaryContent={
         <View style={styles.promptCard}>
-          <Text style={styles.promptLabel}>Liveness check</Text>
+          <Text style={styles.promptLabel}>
+            {stepRef.current === 'capture-face'
+              ? 'Capturing face'
+              : 'Liveness check · head turn'}
+          </Text>
           <Text style={styles.promptText}>{status}</Text>
+          <View style={styles.progressTrack}>
+            <View
+              style={[
+                styles.progressFill,
+                {width: `${Math.round(Math.min(1, progress) * 100)}%`},
+              ]}
+            />
+          </View>
           {isBusy ? <Text style={styles.busy}>Checking...</Text> : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
         </View>
@@ -303,90 +288,6 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
   }
 }
 
-function evaluateHeadTurn(faceMesh: MediaPipeFaceMeshResult) {
-  const nose = faceMesh.landmarks.find(landmark => landmark.index === 1);
-  const leftEye = faceMesh.landmarks.find(landmark => landmark.index === 33);
-  const rightEye = faceMesh.landmarks.find(landmark => landmark.index === 263);
-
-  if (!nose || !leftEye || !rightEye) {
-    return {
-      denominator: 1,
-      faceCenterX: 0,
-      missingLandmarks: {
-        leftEye: !leftEye,
-        nose: !nose,
-        rightEye: !rightEye,
-      },
-      normalizedFaceCenterX: 0,
-      passed: false,
-      rawEyeDistance: 0,
-      sign: 0,
-      yawOffset: 0,
-      yawOffsetRatio: 0,
-    };
-  }
-
-  const faceCenterX = (leftEye.x + rightEye.x) / 2;
-  const rawEyeDistance = Math.abs(rightEye.x - leftEye.x);
-  const minEyeDistance = faceMesh.bounds.width * 0.28;
-  const denominator = Math.max(rawEyeDistance, minEyeDistance, 1);
-  const yawOffset = nose.x - faceCenterX;
-  const yawOffsetRatio = yawOffset / denominator;
-  const sign = Math.sign(yawOffsetRatio);
-
-  return {
-    denominator,
-    faceCenterX,
-    missingLandmarks: null,
-    normalizedFaceCenterX: faceCenterX / Math.max(faceMesh.imageWidth, 1),
-    passed: Math.abs(yawOffsetRatio) >= HEAD_TURN_THRESHOLD_RATIO && sign !== 0,
-    rawEyeDistance,
-    sign,
-    yawOffset,
-    yawOffsetRatio,
-  };
-}
-
-function evaluateOppositeTurn(
-  firstTurn: HeadTurnResult | null,
-  currentTurn: HeadTurnResult,
-) {
-  if (!firstTurn) {
-    return {
-      faceCenterDelta: 0,
-      passed: false,
-      reason: 'missing-first-turn',
-      signChanged: false,
-      yawDelta: 0,
-    };
-  }
-
-  const signChanged =
-    firstTurn.sign !== 0 &&
-    currentTurn.sign !== 0 &&
-    firstTurn.sign !== currentTurn.sign;
-  const yawDelta = Math.abs(
-    currentTurn.yawOffsetRatio - firstTurn.yawOffsetRatio,
-  );
-  const faceCenterDelta = Math.abs(
-    currentTurn.normalizedFaceCenterX - firstTurn.normalizedFaceCenterX,
-  );
-  const poseChangedEnough =
-    yawDelta >= OPPOSITE_POSE_DELTA_RATIO ||
-    faceCenterDelta >= OPPOSITE_FACE_CENTER_DELTA_RATIO;
-
-  return {
-    faceCenterDelta,
-    passed: signChanged || poseChangedEnough,
-    reason: signChanged
-      ? 'sign-changed'
-      : poseChangedEnough
-        ? 'pose-delta'
-        : 'same-pose',
-    signChanged,
-    yawDelta,
-  };
-}
 
 const styles = StyleSheet.create({
   promptCard: {
@@ -411,5 +312,17 @@ const styles = StyleSheet.create({
   error: {
     color: '#ffb4b4',
     fontWeight: '700',
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    overflow: 'hidden',
+    marginTop: 4,
+  },
+  progressFill: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#4f9dff',
   },
 });

@@ -1,7 +1,8 @@
-import React from 'react';
+import React, {useEffect, useState} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 
 import {ActionButton} from '../components/ActionButton';
+import {pendingAuthEventCount} from '../faceAuth/authEventQueue';
 import type {FaceTemplate} from '../faceAuth/types';
 
 type Props = {
@@ -17,6 +18,20 @@ export function HomeScreen({
   onLogin,
   onUpdateOnboarding,
 }: Props) {
+  const [pending, setPending] = useState<number | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void pendingAuthEventCount()
+      .then(count => active && setPending(count))
+      .catch(() => active && setPending(null));
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const synced = localTemplate.backendSyncedAt != null;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -29,6 +44,18 @@ export function HomeScreen({
           <Text style={styles.templateText}>
             Onboarded User ID: {localTemplate.personnelId}
           </Text>
+        </View>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaText}>
+            {synced ? '● Device synced' : '○ Sync pending'}
+          </Text>
+          {pending !== null ? (
+            <Text style={styles.metaText}>
+              {pending === 0
+                ? '● Auth events synced'
+                : `○ ${pending} event(s) queued`}
+            </Text>
+          ) : null}
         </View>
       </View>
 
@@ -83,6 +110,17 @@ const styles = StyleSheet.create({
   templateText: {
     color: '#123b73',
     fontWeight: '800',
+  },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 14,
+    marginTop: 2,
+  },
+  metaText: {
+    color: '#4b5b6e',
+    fontSize: 12,
+    fontWeight: '700',
   },
   centerAction: {
     flex: 1,
