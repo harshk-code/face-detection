@@ -42,6 +42,12 @@ export async function registerOnboardingAndClient(
         createdAt: template.createdAt,
         embedding: template.embedding,
         embeddingDimension: template.embedding.length,
+        enrollmentEmbeddings: template.enrollmentEmbeddings?.map(sample => ({
+          capturedAt: sample.capturedAt,
+          modelVersion: sample.modelVersion,
+          pose: sample.pose,
+          vector: sample.vector,
+        })),
         modelAssetName: FACE_AUTH_CONFIG.modelAssetName,
         modelVersion: template.modelVersion,
         similarityThreshold: template.threshold,

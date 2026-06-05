@@ -3,8 +3,14 @@ import {StyleSheet, Text, View} from 'react-native';
 
 import {CaptureScreen} from '../components/CaptureScreen';
 import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
+import {createEnrollmentFaceEmbedding} from '../faceAuth/enrollmentTemplate';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
-import type {CapturedFacePhoto, FaceEmbedding} from '../faceAuth/types';
+import type {
+  CapturedFacePhoto,
+  EnrollmentEmbedding,
+  EnrollmentPose,
+  FaceEmbedding,
+} from '../faceAuth/types';
 import {
   detectMediaPipeFaceMesh,
   type MediaPipeFaceMeshResult,
@@ -17,12 +23,18 @@ type Props = {
   onFaceDataReady: (embedding: FaceEmbedding) => void;
 };
 
-type LivenessStep = 'turn-first' | 'turn-opposite' | 'capture-face';
+type LivenessStep =
+  | 'capture-front'
+  | 'capture-left'
+  | 'capture-right'
+  | 'turn-first'
+  | 'turn-opposite';
 
 const HEAD_TURN_THRESHOLD_RATIO = 0.07;
 const OPPOSITE_POSE_DELTA_RATIO = 0.06;
 const OPPOSITE_FACE_CENTER_DELTA_RATIO = 0.025;
 const FIRST_AUTO_CAPTURE_DELAY_MS = 850;
+const ENROLLMENT_CAPTURE_DELAY_MS = 1100;
 const AUTO_CAPTURE_RETRY_DELAY_MS = 1050;
 const NEXT_STEP_DELAY_MS = 650;
 
@@ -35,6 +47,7 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
   );
   const firstTurnSignRef = useRef<number | null>(null);
   const firstTurnPoseRef = useRef<HeadTurnResult | null>(null);
+  const enrollmentSamplesRef = useRef<EnrollmentEmbedding[]>([]);
   const isMountedRef = useRef(true);
   const isCaptureInFlightRef = useRef(false);
   const isCompletedRef = useRef(false);
@@ -83,31 +96,13 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
         step: currentStep,
       });
 
-      if (currentStep === 'capture-face') {
-        const faceCrop = await createNormalizedFaceCrop({
+      if (isEnrollmentCaptureStep(currentStep)) {
+        await captureEnrollmentSample({
+          path,
           photoHeight,
-          photoPath: path,
           photoWidth,
+          step: currentStep,
         });
-        const embedding = await generateFaceEmbedding(faceCrop);
-
-        logInfo('face-auth:onboard:embedding-ready', {
-          modelVersion: embedding.modelVersion,
-          vectorLength: embedding.vector.length,
-          vectorSample: embedding.vector
-            .slice(0, 8)
-            .map(value => Number(value.toFixed(6))),
-        });
-        isCompletedRef.current = true;
-        setStatus('Face data captured. Opening onboarding form...');
-        setCameraActive(false);
-        setTimeout(() => {
-          logInfo('face-auth:onboard:navigate-form', {
-            modelVersion: embedding.modelVersion,
-            vectorLength: embedding.vector.length,
-          });
-          onFaceDataReady(embedding);
-        }, 250);
         return;
       }
 
@@ -192,9 +187,10 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
         yawOffset: headTurn.yawOffset,
         yawOffsetRatio: headTurn.yawOffsetRatio,
       });
-      setStepValue('capture-face');
-      setStatus('Liveness verified. Capturing face data...');
-      scheduleAutoCapture(NEXT_STEP_DELAY_MS);
+      enrollmentSamplesRef.current = [];
+      setStepValue('capture-front');
+      setStatus('Liveness verified. Look straight at the camera');
+      scheduleAutoCapture(ENROLLMENT_CAPTURE_DELAY_MS);
     } catch (onboardError) {
       logWarning('OnboardFaceScreen.handlePrimaryAction', onboardError);
       setStatus('Keep your face centered in the frame');
@@ -264,6 +260,118 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
       autoCaptureTimeoutRef.current = null;
     }
   }
+
+  async function captureEnrollmentSample({
+    path,
+    photoHeight,
+    photoWidth,
+    step,
+  }: {
+    path: string;
+    photoHeight: number;
+    photoWidth: number;
+    step: EnrollmentCaptureStep;
+  }) {
+    const pose = getEnrollmentPose(step);
+    const faceCrop = await createNormalizedFaceCrop({
+      photoHeight,
+      photoPath: path,
+      photoWidth,
+    });
+    const embedding = await generateFaceEmbedding(faceCrop);
+    const sample: EnrollmentEmbedding = {
+      capturedAt: new Date().toISOString(),
+      modelVersion: embedding.modelVersion,
+      pose,
+      vector: embedding.vector,
+    };
+
+    enrollmentSamplesRef.current = [...enrollmentSamplesRef.current, sample];
+    logInfo('face-auth:onboard:sample-ready', {
+      capturedSamples: enrollmentSamplesRef.current.length,
+      modelVersion: embedding.modelVersion,
+      pose,
+      vectorLength: embedding.vector.length,
+      vectorSample: embedding.vector
+        .slice(0, 8)
+        .map(value => Number(value.toFixed(6))),
+    });
+
+    if (step === 'capture-front') {
+      setStepValue('capture-left');
+      setStatus('Good. Turn slightly left');
+      scheduleAutoCapture(ENROLLMENT_CAPTURE_DELAY_MS);
+      return;
+    }
+
+    if (step === 'capture-left') {
+      setStepValue('capture-right');
+      setStatus('Good. Turn slightly right');
+      scheduleAutoCapture(ENROLLMENT_CAPTURE_DELAY_MS);
+      return;
+    }
+
+    let enrollmentEmbedding: FaceEmbedding;
+    try {
+      enrollmentEmbedding = createEnrollmentFaceEmbedding(
+        enrollmentSamplesRef.current,
+      );
+    } catch (sampleError) {
+      logWarning('face-auth:onboard:sample-set-error', sampleError);
+      enrollmentSamplesRef.current = [];
+      setStepValue('capture-front');
+      setStatus('Samples were not consistent. Look straight at the camera');
+      setError('Keep the same face centered for all samples.');
+      scheduleAutoCapture(ENROLLMENT_CAPTURE_DELAY_MS);
+      return;
+    }
+    logInfo('face-auth:onboard:embedding-ready', {
+      modelVersion: enrollmentEmbedding.modelVersion,
+      sampleCount: enrollmentEmbedding.samples?.length ?? 0,
+      vectorLength: enrollmentEmbedding.vector.length,
+      vectorSample: enrollmentEmbedding.vector
+        .slice(0, 8)
+        .map(value => Number(value.toFixed(6))),
+    });
+    isCompletedRef.current = true;
+    setStatus('Face data captured. Opening onboarding form...');
+    setCameraActive(false);
+    setTimeout(() => {
+      logInfo('face-auth:onboard:navigate-form', {
+        modelVersion: enrollmentEmbedding.modelVersion,
+        sampleCount: enrollmentEmbedding.samples?.length ?? 0,
+        vectorLength: enrollmentEmbedding.vector.length,
+      });
+      onFaceDataReady(enrollmentEmbedding);
+    }, 250);
+  }
+}
+
+type EnrollmentCaptureStep =
+  | 'capture-front'
+  | 'capture-left'
+  | 'capture-right';
+
+function isEnrollmentCaptureStep(
+  step: LivenessStep,
+): step is EnrollmentCaptureStep {
+  return (
+    step === 'capture-front' ||
+    step === 'capture-left' ||
+    step === 'capture-right'
+  );
+}
+
+function getEnrollmentPose(step: EnrollmentCaptureStep): EnrollmentPose {
+  if (step === 'capture-left') {
+    return 'left';
+  }
+
+  if (step === 'capture-right') {
+    return 'right';
+  }
+
+  return 'front';
 }
 
 function evaluateHeadTurn(faceMesh: MediaPipeFaceMeshResult) {

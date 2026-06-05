@@ -19,10 +19,11 @@ type Props = {
   onBack: () => void;
 };
 
-type MatchDisplay = 'matched' | 'rejected' | null;
+type MatchDisplay = 'confirming' | 'matched' | 'rejected' | null;
 
 const AUTO_CAPTURE_DELAY_MS = 900;
 const CAMERA_SETTLE_MS = 650;
+const REQUIRED_CONSECUTIVE_MATCHES = 2;
 const RETRY_DELAY_MS = 1400;
 
 export function VerifyFaceScreen({
@@ -33,6 +34,7 @@ export function VerifyFaceScreen({
   const autoCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const consecutiveMatchCountRef = useRef(0);
   const isCaptureInFlightRef = useRef(false);
   const latestFaceRef = useRef<DetectedFaceSnapshot | null>(null);
   const capturePhotoRef = useRef<(() => Promise<CapturedFacePhoto>) | null>(
@@ -111,17 +113,38 @@ export function VerifyFaceScreen({
         matchResult: result,
         template: localTemplate,
       });
-      setMatchDisplay(result.matched ? 'matched' : 'rejected');
-
       if (result.matched) {
-        setToast('Face matched. Logging you in...');
-        authenticated = true;
+        consecutiveMatchCountRef.current += 1;
+        logInfo('face-auth:verify:sample-accepted', {
+          consecutiveMatches: consecutiveMatchCountRef.current,
+          requiredConsecutiveMatches: REQUIRED_CONSECUTIVE_MATCHES,
+          score: Number(result.score.toFixed(6)),
+          threshold: result.threshold,
+        });
+
+        if (consecutiveMatchCountRef.current >= REQUIRED_CONSECUTIVE_MATCHES) {
+          setMatchDisplay('matched');
+          setToast('Face matched. Logging you in...');
+          authenticated = true;
+          return;
+        }
+
+        setMatchDisplay('confirming');
+        setToast('Face matched. Hold still for confirmation...');
+        await delay(RETRY_DELAY_MS);
         return;
       }
 
+      consecutiveMatchCountRef.current = 0;
+      setMatchDisplay('rejected');
+      logInfo('face-auth:verify:sample-rejected', {
+        score: Number(result.score.toFixed(6)),
+        threshold: result.threshold,
+      });
       setToast('Face did not match. Please try again.');
       await delay(RETRY_DELAY_MS);
     } catch (captureError) {
+      consecutiveMatchCountRef.current = 0;
       logError('VerifyFaceScreen.handleAutoCapture', captureError);
       setToast(
         captureError instanceof Error
@@ -161,6 +184,8 @@ export function VerifyFaceScreen({
             styles.statusCard,
             matchDisplay === 'matched'
               ? styles.statusMatched
+              : matchDisplay === 'confirming'
+                ? styles.statusConfirming
               : matchDisplay
                 ? styles.statusRejected
                 : null,
@@ -170,7 +195,9 @@ export function VerifyFaceScreen({
             <Text style={styles.statusMeta}>
               {matchDisplay === 'matched'
                 ? 'Authentication successful'
-                : 'Keep your face centered and try again'}
+                : matchDisplay === 'confirming'
+                  ? 'Confirming with one more capture'
+                  : 'Keep your face centered and try again'}
             </Text>
           ) : (
             <Text style={styles.statusMeta}>
@@ -203,6 +230,10 @@ const styles = StyleSheet.create({
   statusMatched: {
     borderColor: 'rgba(110, 231, 168, 0.55)',
     backgroundColor: 'rgba(22, 101, 52, 0.6)',
+  },
+  statusConfirming: {
+    borderColor: 'rgba(125, 211, 252, 0.55)',
+    backgroundColor: 'rgba(14, 116, 144, 0.58)',
   },
   statusRejected: {
     borderColor: 'rgba(255, 180, 180, 0.55)',
