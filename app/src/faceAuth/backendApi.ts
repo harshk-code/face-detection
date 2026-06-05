@@ -36,7 +36,7 @@ export type BackendAuthEventPayload = {
     type: string;
   };
   modelVersion: string;
-  result: 'SUCCESS' | 'FAILED';
+  result: 'SUCCESS';
   threshold: number;
   userId: string | null;
 };
