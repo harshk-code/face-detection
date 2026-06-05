@@ -1,6 +1,6 @@
 ---
 marp: true
-title: Offline Facial Recognition & Liveness — NHAI/MORTH Hackathon 7.0
+title: Netra — Offline Facial Recognition & Liveness — NHAI Hackathon 7.0
 paginate: true
 theme: default
 class: lead
@@ -15,10 +15,10 @@ style: |
   a { color: #7dd3fc; }
 ---
 
-# Offline Facial Recognition & Liveness
-### Secure field-personnel authentication for zero-network zones
+# Netra
+### Offline facial recognition & liveness for zero-network field authentication
 
-**NHAI / MORTH — Hackathon 7.0**
+**NHAI Hackathon 7.0**
 
 Fully offline · React Native (Android + iOS) · ≈10 MB models · CPU-only
 
@@ -150,7 +150,7 @@ Meets: Android 8.0+/iOS 12+ · 3 GB RAM · no GPU · ≤ 20 MB · offline.
 
 ---
 
-# Thank you
+# Netra — Thank you
 
 **Offline. Lightweight. Secure. Cross-platform.**
 

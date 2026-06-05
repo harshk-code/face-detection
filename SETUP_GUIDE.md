@@ -1,6 +1,11 @@
 # Local App and Backend Setup Guide
 
-This guide explains how to run the Face Detection backend on your laptop and connect the mobile app to it from a real phone.
+This guide explains how to run the Netra (Face Detection) backend on your laptop and connect the mobile app to it from a real phone.
+
+> All shell commands are written **relative to the repository root** (the folder
+> containing `app/`, `face-detection-backend/`, and `panel/`). Run `cd` into that folder
+> first. The backend listens on port **8080** by default; if 8080 is taken, start it with
+> `PORT=<port>` and set the same `http://<ip>:<port>` in the app's API Settings.
 
 The working setup is:
 
@@ -59,7 +64,7 @@ face-detection-backend/data/
 Open a terminal from the backend folder:
 
 ```sh
-cd /Users/a37970/Desktop/face-detection/face-detection-backend
+cd face-detection-backend
 go run ./cmd/server
 ```
 
@@ -177,7 +182,7 @@ Common causes:
 From the app folder:
 
 ```sh
-cd /Users/a37970/Desktop/face-detection/app
+cd app
 yarn install
 ```
 
@@ -192,14 +197,14 @@ In a second terminal, run the app.
 For Android:
 
 ```sh
-cd /Users/a37970/Desktop/face-detection/app
+cd app
 yarn android
 ```
 
 For iOS:
 
 ```sh
-cd /Users/a37970/Desktop/face-detection/app
+cd app
 cd ios
 bundle exec pod install
 cd ..
@@ -279,7 +284,7 @@ face-detection-backend/data/
 You can inspect backend data after onboarding:
 
 ```sh
-ls -la /Users/a37970/Desktop/face-detection/face-detection-backend/data
+ls -la face-detection-backend/data
 ```
 
 Expected files can include:
@@ -298,7 +303,7 @@ The simple local demo does not require MongoDB. Use Mongo only if you specifical
 Start MongoDB:
 
 ```sh
-cd /Users/a37970/Desktop/face-detection/face-detection-backend
+cd face-detection-backend
 docker compose up -d mongo
 ```
 
@@ -423,7 +428,7 @@ Then update API Settings in the app with the new URL.
 3. Start backend:
 
    ```sh
-   cd /Users/a37970/Desktop/face-detection/face-detection-backend
+   cd face-detection-backend
    go run ./cmd/server
    ```
 

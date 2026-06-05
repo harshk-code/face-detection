@@ -1,6 +1,6 @@
 # Technical Documentation — Offline Facial Recognition & Liveness
 
-**NHAI / MORTH Hackathon 7.0** — a lightweight, fully-offline facial recognition
+**Netra — NHAI Hackathon 7.0** — a lightweight, fully-offline facial recognition
 and liveness-detection system for authenticating field personnel on mid-range
 mobile devices in zero-network zones, designed to integrate into the existing
 Datalake 3.0 React Native app on Android **and** iOS.
@@ -80,11 +80,16 @@ pose and lighting.
 ### Matching decision (`matching.ts`)
 - `centroidScore = cos(live, template.centroid)`
 - `bestSample = max cos(live, pose-sample)`
-- **matched** when `centroidScore ≥ 0.75` **or** `bestSample ≥ 0.80`.
-- Verify additionally requires a rolling-window confirmation (2 of last 3 frames
-  ≥ threshold, or a single strong match ≥ 0.82) to reject transient false hits.
+- a frame is **matched** when `centroidScore ≥ 0.60` **or** `bestSample ≥ 0.80`.
+- Login additionally requires a rolling-window confirmation (2 of last 3 frames
+  ≥ 0.60, or a single strong match ≥ 0.82) on top of the liveness gate, to reject
+  transient false hits.
 
-Thresholds are tunable in `app/src/faceAuth/modelConfig.ts`.
+Thresholds are tunable in `app/src/faceAuth/modelConfig.ts`. The single-frame centroid
+threshold (0.60) is deliberately permissive for usability and is backstopped by the
+0.80 pose-sample bar, the 2-of-3 window, the 0.82 strong-match, and the liveness gate.
+For high-security 1:1 use, raise it to ≥0.70 and re-validate (see
+`docs/ACCURACY_VALIDATION.md`).
 
 ## 4. Offline liveness / anti-spoofing
 
@@ -155,8 +160,11 @@ candidate for a native crop optimization).
 
 **Accuracy**: recognition uses MobileFaceNet/ArcFace trained on WebFace600K, a
 model family that reports >99% verification accuracy on LFW-style benchmarks
-(model-reported, not our measurement). Our operating point is cosine ≥ 0.75
-(pose-sample ≥ 0.80) with multi-frame centroid enrollment; tune per deployment.
+(model-reported, **not our own measurement**). Our operating point is cosine ≥ 0.60
+(pose-sample ≥ 0.80) with multi-frame centroid enrollment + 2-of-3 confirmation; tune
+per deployment. We have **not** run a custom FAR/FRR study on Indian demographics /
+lighting — see **`docs/ACCURACY_VALIDATION.md`** for the reproducible methodology and the
+`app/src/dev/accuracyEval.ts` harness to measure it.
 
 ## 7. Security
 
@@ -173,11 +181,29 @@ model family that reports >99% verification accuracy on LFW-style benchmarks
 
 | Requirement | Status |
 |---|---|
-| React Native, Android **and** iOS | ✅ native modules for both; models bundled both |
+| React Native, Android **and** iOS | Android **verified on-device**; iOS source-complete (see note) |
 | Min OS: Android 8.0+ / iOS 12+ | ✅ Android minSdk 26; iOS target 15.5 |
 | 3 GB RAM, no GPU | ✅ FP16 ~10 MB models, CPU `default` delegate |
 | Model ≤ 20 MB | ✅ ≈ 10 MB |
 | Open-source only | ✅ see `THIRD_PARTY_LICENSES.md` |
+
+### Cross-platform status (verified honestly)
+- **Android — verified**: built and run on a physical device (Samsung SM-F956B); the full
+  onboard → liveness-gated login → sync/purge flow and the benchmark were exercised on-device.
+- **iOS — source-complete, build pending a Mac with full Xcode**: the iOS native modules
+  (`MediaPipeFaceMesh.swift`, `FaceTemplateStore.swift` + ObjC bridges) are implemented and
+  registered in `MorthHackathon.xcodeproj`, the two model assets are bundled, the Podfile +
+  `Podfile.lock` are present, and **every native method the JS calls has a matching Swift
+  implementation** (FaceMesh detect/crop; template + sync-queue + api-base-url storage).
+  iOS was **not** compiled here because this build host has only the **Command Line Tools**,
+  not full Xcode — `pod install` reaches native-pod compilation then fails with
+  `xcrun: error: SDK "iphoneos" cannot be located`. To build iOS, use a Mac with Xcode
+  installed:
+  ```bash
+  sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+  cd app && bundle install && cd ios && bundle exec pod install
+  cd .. && npx react-native run-ios   # or open ios/MorthHackathon.xcworkspace in Xcode
+  ```
 
 ## 9. Integration
 
