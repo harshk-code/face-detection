@@ -1,4 +1,4 @@
-import React, {useCallback, useEffect, useRef, useState} from 'react';
+import React, {useEffect, useRef, useState} from 'react';
 import {StyleSheet, Text, View} from 'react-native';
 
 import {CaptureScreen} from '../components/CaptureScreen';
@@ -6,11 +6,17 @@ import {enqueueAuthEventFireAndForget} from '../faceAuth/authEventQueue';
 import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
 import {matchFaceEmbedding} from '../faceAuth/matching';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
-import type {
-  CapturedFacePhoto,
-  DetectedFaceSnapshot,
-  FaceTemplate,
-} from '../faceAuth/types';
+import {
+  evaluateLiveness,
+  livenessChallengeType,
+  sampleLivenessFrame,
+  type LivenessFrame,
+  type LivenessSignal,
+} from '../faceAuth/verifyLiveness';
+import type {CapturedFacePhoto, FaceTemplate} from '../faceAuth/types';
+import {
+  detectMediaPipeFaceMesh,
+} from '../native/MediaPipeFaceMesh';
 import {logError, logInfo} from '../utils/logError';
 
 type Props = {
@@ -19,13 +25,15 @@ type Props = {
   onBack: () => void;
 };
 
+type Phase = 'liveness' | 'matching';
 type MatchDisplay = 'confirming' | 'matched' | 'rejected' | null;
 
-const AUTO_CAPTURE_DELAY_MS = 650;
 const CAMERA_SETTLE_MS = 300;
+const LIVENESS_SAMPLE_DELAY_MS = 350;
+const MATCH_RETRY_DELAY_MS = 650;
+const MAX_LIVENESS_FRAMES = 14;
 const GOOD_MATCH_WINDOW_SIZE = 3;
 const REQUIRED_GOOD_MATCHES_IN_WINDOW = 2;
-const RETRY_DELAY_MS = 650;
 const STRONG_MATCH_THRESHOLD = 0.82;
 
 export function VerifyFaceScreen({
@@ -37,99 +45,130 @@ export function VerifyFaceScreen({
     null,
   );
   const isCaptureInFlightRef = useRef(false);
-  const latestFaceRef = useRef<DetectedFaceSnapshot | null>(null);
-  const recentScoresRef = useRef<number[]>([]);
+  const isMountedRef = useRef(true);
+  const isCompletedRef = useRef(false);
   const capturePhotoRef = useRef<(() => Promise<CapturedFacePhoto>) | null>(
     null,
   );
+  const livenessFramesRef = useRef<LivenessFrame[]>([]);
+  const livenessPassedRef = useRef(false);
+  const livenessSignalRef = useRef<LivenessSignal | null>(null);
+  const recentScoresRef = useRef<number[]>([]);
+  const startedAtRef = useRef(0);
+
   const [isFaceDetected, setIsFaceDetected] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [phase, setPhase] = useState<Phase>('liveness');
+  const [progress, setProgress] = useState(0);
   const [matchDisplay, setMatchDisplay] = useState<MatchDisplay>(null);
-  const [toast, setToast] = useState('Look at the camera');
+  const [toast, setToast] = useState('Blink or turn your head slightly');
 
   useEffect(() => {
+    isMountedRef.current = true;
+    startedAtRef.current = Date.now();
+    scheduleAutoCapture(CAMERA_SETTLE_MS);
+
     return () => {
-      if (autoCaptureTimeoutRef.current) {
-        clearTimeout(autoCaptureTimeoutRef.current);
-      }
+      isMountedRef.current = false;
+      clearAutoCaptureTimer();
     };
+    // The capture loop reads refs so it can keep sampling across prompts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleFaceSnapshotChange = useCallback(
-    (face: DetectedFaceSnapshot | null) => {
-      latestFaceRef.current = face;
-    },
-    [],
-  );
+  function clearAutoCaptureTimer() {
+    if (autoCaptureTimeoutRef.current) {
+      clearTimeout(autoCaptureTimeoutRef.current);
+      autoCaptureTimeoutRef.current = null;
+    }
+  }
 
-  useEffect(() => {
-    if (!isFaceDetected || isCapturing || isCaptureInFlightRef.current) {
+  function scheduleAutoCapture(delayMs: number) {
+    if (!isMountedRef.current || isCompletedRef.current) {
       return;
     }
-
-    setToast('Face detected. Matching...');
+    clearAutoCaptureTimer();
     autoCaptureTimeoutRef.current = setTimeout(() => {
       void handleAutoCapture();
-    }, AUTO_CAPTURE_DELAY_MS);
-
-    return () => {
-      if (autoCaptureTimeoutRef.current) {
-        clearTimeout(autoCaptureTimeoutRef.current);
-      }
-    };
-    // handleAutoCapture intentionally reads refs and stable props.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isCapturing, isFaceDetected]);
+    }, delayMs);
+  }
 
   async function handleAutoCapture() {
-    if (isCaptureInFlightRef.current) {
+    if (isCaptureInFlightRef.current || isCompletedRef.current) {
+      return;
+    }
+    if (!capturePhotoRef.current) {
+      scheduleAutoCapture(MATCH_RETRY_DELAY_MS);
       return;
     }
 
     isCaptureInFlightRef.current = true;
     setIsCapturing(true);
     let authenticated = false;
-    const startedAt = Date.now();
 
     try {
-      setMatchDisplay(null);
-      await delay(CAMERA_SETTLE_MS);
+      const {path, photoHeight, photoWidth} = await capturePhotoRef.current();
 
-      if (!capturePhotoRef.current) {
-        throw new Error('Camera is not ready yet. Please try again.');
+      // Phase 1: gate the match behind an offline liveness check.
+      if (!livenessPassedRef.current) {
+        const faceMesh = await detectMediaPipeFaceMesh(path);
+        livenessFramesRef.current = [
+          ...livenessFramesRef.current,
+          sampleLivenessFrame(faceMesh),
+        ].slice(-MAX_LIVENESS_FRAMES);
+
+        const liveness = evaluateLiveness(livenessFramesRef.current);
+        setProgress(liveness.progress);
+
+        if (!liveness.passed) {
+          setToast('Blink or turn your head slightly to prove you are live');
+          scheduleAutoCapture(LIVENESS_SAMPLE_DELAY_MS);
+          return;
+        }
+
+        livenessPassedRef.current = true;
+        livenessSignalRef.current = liveness.signal;
+        setPhase('matching');
+        setProgress(1);
+        setToast('Liveness confirmed. Matching...');
+        logInfo('face-auth:verify:liveness-passed', {
+          frames: livenessFramesRef.current.length,
+          signal: liveness.signal,
+        });
+        // Fall through and match on this capture.
       }
 
-      const { path, photoHeight, photoWidth } = await capturePhotoRef.current();
-
+      // Phase 2: recognition.
       const faceCrop = await createNormalizedFaceCrop({
-        detectedFace: latestFaceRef.current,
         photoHeight,
         photoPath: path,
         photoWidth,
       });
       const liveEmbedding = await generateFaceEmbedding(faceCrop);
       const result = matchFaceEmbedding(liveEmbedding.vector, localTemplate);
+
       enqueueAuthEventFireAndForget({
         capturedAt: new Date().toISOString(),
-        latencyMs: Date.now() - startedAt,
+        latencyMs: Date.now() - startedAtRef.current,
+        liveness: {
+          passed: true,
+          type: livenessChallengeType(livenessSignalRef.current),
+        },
         matchResult: result,
         template: localTemplate,
       });
+
       if (result.matched) {
         const decision = recordMatchScore(result.score, result.threshold);
         logInfo('face-auth:verify:sample-accepted', {
           decision,
-          recentScores: recentScoresRef.current.map(score =>
-            Number(score.toFixed(6)),
-          ),
-          requiredGoodMatchesInWindow: REQUIRED_GOOD_MATCHES_IN_WINDOW,
+          livenessSignal: livenessSignalRef.current,
           score: Number(result.score.toFixed(6)),
-          strongMatchThreshold: STRONG_MATCH_THRESHOLD,
           threshold: result.threshold,
-          windowSize: GOOD_MATCH_WINDOW_SIZE,
         });
 
         if (decision.authenticated) {
+          isCompletedRef.current = true;
           setMatchDisplay('matched');
           setToast('Face matched. Logging you in...');
           authenticated = true;
@@ -138,21 +177,18 @@ export function VerifyFaceScreen({
 
         setMatchDisplay('confirming');
         setToast('Face matched. Hold still for confirmation...');
-        await delay(RETRY_DELAY_MS);
+        scheduleAutoCapture(MATCH_RETRY_DELAY_MS);
         return;
       }
 
       recordMatchScore(result.score, result.threshold);
       setMatchDisplay('rejected');
       logInfo('face-auth:verify:sample-rejected', {
-        recentScores: recentScoresRef.current.map(score =>
-          Number(score.toFixed(6)),
-        ),
         score: Number(result.score.toFixed(6)),
         threshold: result.threshold,
       });
       setToast('Face did not match. Please try again.');
-      await delay(RETRY_DELAY_MS);
+      scheduleAutoCapture(MATCH_RETRY_DELAY_MS);
     } catch (captureError) {
       logError('VerifyFaceScreen.handleAutoCapture', captureError);
       setToast(
@@ -160,11 +196,12 @@ export function VerifyFaceScreen({
           ? captureError.message
           : 'Unable to match face.',
       );
-      await delay(RETRY_DELAY_MS);
+      scheduleAutoCapture(MATCH_RETRY_DELAY_MS);
     } finally {
-      setIsCapturing(false);
-      isCaptureInFlightRef.current = false;
-
+      if (isMountedRef.current && !isCompletedRef.current) {
+        setIsCapturing(false);
+        isCaptureInFlightRef.current = false;
+      }
       if (authenticated) {
         onAuthenticated();
       }
@@ -193,7 +230,7 @@ export function VerifyFaceScreen({
   return (
     <CaptureScreen
       title="Login"
-      subtitle="Face match starts automatically"
+      subtitle="Liveness check, then face match — both run automatically"
       primaryLabel="Matching"
       enableLiveFaceDetector={false}
       primaryVisible={false}
@@ -203,9 +240,12 @@ export function VerifyFaceScreen({
       onCapture={() => undefined}
       onCapturePhotoReady={capturePhoto => {
         capturePhotoRef.current = capturePhoto;
+        if (capturePhoto) {
+          scheduleAutoCapture(CAMERA_SETTLE_MS);
+        }
       }}
       onFaceDetectedChange={setIsFaceDetected}
-      onFaceSnapshotChange={handleFaceSnapshotChange}
+      onFaceSnapshotChange={() => undefined}
       secondaryContent={
         <View
           style={[
@@ -213,37 +253,36 @@ export function VerifyFaceScreen({
             matchDisplay === 'matched'
               ? styles.statusMatched
               : matchDisplay === 'confirming'
-              ? styles.statusConfirming
-              : matchDisplay
-              ? styles.statusRejected
-              : null,
-          ]}
-        >
+                ? styles.statusConfirming
+                : matchDisplay
+                  ? styles.statusRejected
+                  : null,
+          ]}>
+          <Text style={styles.statusLabel}>
+            {phase === 'matching' ? 'Recognition' : 'Liveness check'}
+          </Text>
           <Text style={styles.statusTitle}>{toast}</Text>
-          {matchDisplay ? (
-            <Text style={styles.statusMeta}>
-              {matchDisplay === 'matched'
-                ? 'Authentication successful'
-                : matchDisplay === 'confirming'
-                ? 'Confirming with one more capture'
-                : 'Keep your face centered and try again'}
-            </Text>
-          ) : (
-            <Text style={styles.statusMeta}>
-              Waiting for a clear face to compare with{' '}
-              {localTemplate.personnelId}
-            </Text>
-          )}
+          {phase === 'liveness' && !matchDisplay ? (
+            <View style={styles.progressTrack}>
+              <View
+                style={[
+                  styles.progressFill,
+                  {width: `${Math.round(Math.min(1, progress) * 100)}%`},
+                ]}
+              />
+            </View>
+          ) : null}
+          <Text style={styles.statusMeta}>
+            {matchDisplay === 'matched'
+              ? 'Authentication successful'
+              : matchDisplay === 'rejected'
+                ? 'Keep your face centered and try again'
+                : `Verifying against ${localTemplate.personnelId}`}
+          </Text>
         </View>
       }
     />
   );
-}
-
-function delay(durationMs: number) {
-  return new Promise<void>(resolve => {
-    setTimeout(resolve, durationMs);
-  });
 }
 
 const styles = StyleSheet.create({
@@ -255,7 +294,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.18)',
     backgroundColor: 'rgba(0, 0, 0, 0.36)',
     padding: 12,
-    gap: 4,
+    gap: 6,
   },
   statusMatched: {
     borderColor: 'rgba(110, 231, 168, 0.55)',
@@ -269,6 +308,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 180, 180, 0.55)',
     backgroundColor: 'rgba(127, 29, 29, 0.58)',
   },
+  statusLabel: {
+    color: '#d7dde8',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
   statusTitle: {
     color: '#ffffff',
     fontSize: 16,
@@ -280,5 +325,16 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     textAlign: 'center',
+  },
+  progressTrack: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: 6,
+    borderRadius: 999,
+    backgroundColor: '#4f9dff',
   },
 });

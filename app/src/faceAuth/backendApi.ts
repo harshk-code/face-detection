@@ -41,6 +41,19 @@ export type BackendAuthEventPayload = {
   userId: string | null;
 };
 
+/** Server response for `POST /sync/events` (single-event batch here). */
+export type SyncEventsResponse = {
+  acceptedEventIds?: string[];
+  duplicateEventIds?: string[];
+  rejectedEvents?: Array<{eventId?: string; reason?: string}>;
+};
+
+/** Server response for `POST /sync/purge-ack`. */
+export type PurgeAckResponse = {
+  purgedEventIds?: string[];
+  unknownEventIds?: string[];
+};
+
 export async function registerBackendUser(template: FaceTemplate) {
   const userResponse = await postJson<UserOnboardingResponse>('/api/users', {
     employeeId: template.personnelId,
@@ -108,8 +121,8 @@ export async function registerBackendClient(userId: string) {
 export async function postAuthEvent(
   backendClientId: string,
   event: BackendAuthEventPayload,
-) {
-  const response = await postJson<unknown>(
+): Promise<SyncEventsResponse> {
+  const response = await postJson<SyncEventsResponse>(
     `/api/clients/${encodeURIComponent(backendClientId)}/sync/events`,
     {
       events: [event],
@@ -117,10 +130,42 @@ export async function postAuthEvent(
   );
 
   logInfo('backend:auth-event:complete', {
+    accepted: response.acceptedEventIds,
+    duplicate: response.duplicateEventIds,
     eventId: event.eventId,
-    response,
     result: event.result,
   });
+
+  return response;
+}
+
+/**
+ * Acknowledge that the given server-confirmed events can be purged from the
+ * device. The backend marks them PURGED (kept for audit); the caller then
+ * deletes the local rows — completing the offline→online sync/purge lifecycle
+ * the spec requires. Returns the event ids the server confirmed as purged.
+ */
+export async function postPurgeAck(
+  backendClientId: string,
+  eventIds: string[],
+): Promise<string[]> {
+  if (eventIds.length === 0) {
+    return [];
+  }
+
+  const response = await postJson<PurgeAckResponse>(
+    `/api/clients/${encodeURIComponent(backendClientId)}/sync/purge-ack`,
+    {eventIds},
+  );
+
+  const purged = response.purgedEventIds ?? [];
+  logInfo('backend:purge-ack:complete', {
+    purged,
+    requested: eventIds,
+    unknown: response.unknownEventIds ?? [],
+  });
+
+  return purged;
 }
 
 async function postJson<ResponseBody>(path: string, body: unknown) {

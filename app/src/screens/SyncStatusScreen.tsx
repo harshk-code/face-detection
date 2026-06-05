@@ -23,22 +23,27 @@ export function SyncStatusScreen({
   snapshot,
 }: Props) {
   const pendingJobs = snapshot.jobs.filter(job => job.status !== 'synced');
-  const syncedJobs = snapshot.jobs.filter(job => job.status === 'synced');
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.kicker}>Offline API Queue</Text>
-        <Text style={styles.title}>Sync Status</Text>
+        <Text style={styles.title}>Sync &amp; Purge</Text>
         <Text style={styles.subtitle}>
-          Failed or offline API calls are saved locally and retried in the
-          background. This screen shows what is pending and what has synced.
+          Auth events captured offline are saved locally and synced when the
+          network returns. Once the server confirms an event, the device
+          acknowledges and <Text style={styles.bold}>purges</Text> the local
+          copy — no field data lingers on the phone.
         </Text>
       </View>
 
       <View style={styles.summaryRow}>
         <SummaryTile label="Pending" value={snapshot.pendingCount} tone="warn" />
-        <SummaryTile label="Synced" value={snapshot.syncedCount} tone="ok" />
+        <SummaryTile
+          label="Synced & purged"
+          value={snapshot.purgedCount}
+          tone="ok"
+        />
       </View>
 
       <View style={styles.actions}>
@@ -56,18 +61,17 @@ export function SyncStatusScreen({
         {pendingJobs.length ? (
           pendingJobs.map(job => <JobCard key={job.id} job={job} />)
         ) : (
-          <EmptyState copy="No pending API calls." />
+          <EmptyState copy="No pending API calls — everything is synced and purged." />
         )}
 
-        <SectionTitle title="Synced Calls" />
-        {syncedJobs.length ? (
-          syncedJobs
-            .slice()
-            .reverse()
-            .map(job => <JobCard key={job.id} job={job} />)
-        ) : (
-          <EmptyState copy="No API calls have synced yet." />
-        )}
+        <SectionTitle title="Purged This Session" />
+        <Text style={styles.purgeNote}>
+          {snapshot.purgedCount > 0
+            ? `${snapshot.purgedCount} event${
+                snapshot.purgedCount === 1 ? '' : 's'
+              } synced to the server and removed from this device.`
+            : 'Synced events are acknowledged and deleted from local storage. The count appears here once events sync.'}
+        </Text>
       </ScrollView>
 
       <View style={styles.bottomBar}>
@@ -177,8 +181,19 @@ const styles = StyleSheet.create({
   actions: {
     marginTop: 14,
   },
+  bold: {
+    fontWeight: '900',
+    color: '#172033',
+  },
   bottomBar: {
     paddingTop: 10,
+  },
+  purgeNote: {
+    color: '#526173',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+    marginBottom: 18,
   },
   container: {
     flex: 1,
