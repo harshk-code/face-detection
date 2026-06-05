@@ -1,17 +1,17 @@
-import React, {useCallback, useEffect, useRef, useState} from 'react';
-import {StyleSheet, Text, View} from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 
-import {CaptureScreen} from '../components/CaptureScreen';
-import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
-import {matchFaceEmbedding} from '../faceAuth/matching';
-import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
-import {syncAuthEventFireAndForget} from '../faceAuth/backendApi';
+import { CaptureScreen } from '../components/CaptureScreen';
+import { generateFaceEmbedding } from '../faceAuth/embeddingModel';
+import { matchFaceEmbedding } from '../faceAuth/matching';
+import { createNormalizedFaceCrop } from '../faceAuth/preprocessing';
+import { syncAuthEventFireAndForget } from '../faceAuth/backendApi';
 import type {
   CapturedFacePhoto,
   DetectedFaceSnapshot,
   FaceTemplate,
 } from '../faceAuth/types';
-import {logError, logInfo} from '../utils/logError';
+import { logError, logInfo } from '../utils/logError';
 
 type Props = {
   localTemplate: FaceTemplate;
@@ -21,10 +21,12 @@ type Props = {
 
 type MatchDisplay = 'confirming' | 'matched' | 'rejected' | null;
 
-const AUTO_CAPTURE_DELAY_MS = 900;
-const CAMERA_SETTLE_MS = 650;
-const REQUIRED_CONSECUTIVE_MATCHES = 2;
-const RETRY_DELAY_MS = 1400;
+const AUTO_CAPTURE_DELAY_MS = 650;
+const CAMERA_SETTLE_MS = 300;
+const GOOD_MATCH_WINDOW_SIZE = 3;
+const REQUIRED_GOOD_MATCHES_IN_WINDOW = 2;
+const RETRY_DELAY_MS = 650;
+const STRONG_MATCH_THRESHOLD = 0.82;
 
 export function VerifyFaceScreen({
   localTemplate,
@@ -34,9 +36,9 @@ export function VerifyFaceScreen({
   const autoCaptureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
-  const consecutiveMatchCountRef = useRef(0);
   const isCaptureInFlightRef = useRef(false);
   const latestFaceRef = useRef<DetectedFaceSnapshot | null>(null);
+  const recentScoresRef = useRef<number[]>([]);
   const capturePhotoRef = useRef<(() => Promise<CapturedFacePhoto>) | null>(
     null,
   );
@@ -97,7 +99,7 @@ export function VerifyFaceScreen({
         throw new Error('Camera is not ready yet. Please try again.');
       }
 
-      const {path, photoHeight, photoWidth} = await capturePhotoRef.current();
+      const { path, photoHeight, photoWidth } = await capturePhotoRef.current();
 
       const faceCrop = await createNormalizedFaceCrop({
         detectedFace: latestFaceRef.current,
@@ -114,15 +116,20 @@ export function VerifyFaceScreen({
         template: localTemplate,
       });
       if (result.matched) {
-        consecutiveMatchCountRef.current += 1;
+        const decision = recordMatchScore(result.score, result.threshold);
         logInfo('face-auth:verify:sample-accepted', {
-          consecutiveMatches: consecutiveMatchCountRef.current,
-          requiredConsecutiveMatches: REQUIRED_CONSECUTIVE_MATCHES,
+          decision,
+          recentScores: recentScoresRef.current.map(score =>
+            Number(score.toFixed(6)),
+          ),
+          requiredGoodMatchesInWindow: REQUIRED_GOOD_MATCHES_IN_WINDOW,
           score: Number(result.score.toFixed(6)),
+          strongMatchThreshold: STRONG_MATCH_THRESHOLD,
           threshold: result.threshold,
+          windowSize: GOOD_MATCH_WINDOW_SIZE,
         });
 
-        if (consecutiveMatchCountRef.current >= REQUIRED_CONSECUTIVE_MATCHES) {
+        if (decision.authenticated) {
           setMatchDisplay('matched');
           setToast('Face matched. Logging you in...');
           authenticated = true;
@@ -135,16 +142,18 @@ export function VerifyFaceScreen({
         return;
       }
 
-      consecutiveMatchCountRef.current = 0;
+      recordMatchScore(result.score, result.threshold);
       setMatchDisplay('rejected');
       logInfo('face-auth:verify:sample-rejected', {
+        recentScores: recentScoresRef.current.map(score =>
+          Number(score.toFixed(6)),
+        ),
         score: Number(result.score.toFixed(6)),
         threshold: result.threshold,
       });
       setToast('Face did not match. Please try again.');
       await delay(RETRY_DELAY_MS);
     } catch (captureError) {
-      consecutiveMatchCountRef.current = 0;
       logError('VerifyFaceScreen.handleAutoCapture', captureError);
       setToast(
         captureError instanceof Error
@@ -160,6 +169,25 @@ export function VerifyFaceScreen({
         onAuthenticated();
       }
     }
+  }
+
+  function recordMatchScore(score: number, threshold: number) {
+    const recentScores = [...recentScoresRef.current, score].slice(
+      -GOOD_MATCH_WINDOW_SIZE,
+    );
+    recentScoresRef.current = recentScores;
+    const goodMatchCount = recentScores.filter(
+      recentScore => recentScore >= threshold,
+    ).length;
+    const strongMatch = score >= STRONG_MATCH_THRESHOLD;
+
+    return {
+      authenticated:
+        strongMatch || goodMatchCount >= REQUIRED_GOOD_MATCHES_IN_WINDOW,
+      goodMatchCount,
+      reason: strongMatch ? 'strong-match' : 'rolling-window',
+      strongMatch,
+    };
   }
 
   return (
@@ -185,23 +213,25 @@ export function VerifyFaceScreen({
             matchDisplay === 'matched'
               ? styles.statusMatched
               : matchDisplay === 'confirming'
-                ? styles.statusConfirming
+              ? styles.statusConfirming
               : matchDisplay
-                ? styles.statusRejected
-                : null,
-          ]}>
+              ? styles.statusRejected
+              : null,
+          ]}
+        >
           <Text style={styles.statusTitle}>{toast}</Text>
           {matchDisplay ? (
             <Text style={styles.statusMeta}>
               {matchDisplay === 'matched'
                 ? 'Authentication successful'
                 : matchDisplay === 'confirming'
-                  ? 'Confirming with one more capture'
-                  : 'Keep your face centered and try again'}
+                ? 'Confirming with one more capture'
+                : 'Keep your face centered and try again'}
             </Text>
           ) : (
             <Text style={styles.statusMeta}>
-              Waiting for a clear face to compare with {localTemplate.personnelId}
+              Waiting for a clear face to compare with{' '}
+              {localTemplate.personnelId}
             </Text>
           )}
         </View>
