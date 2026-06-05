@@ -26,7 +26,7 @@ export function HomeScreen({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>MORTH Hackathon 7.0</Text>
+        <Text style={styles.title}>Netra</Text>
         <Text style={styles.subtitle}>
           Offline facial recognition and liveness detection for remote field
           operations.
