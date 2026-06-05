@@ -10,3 +10,6 @@ face-detection-backend/.local/
 # JetBrains IDE
 .idea/
 *.iml
+
+# MS Office temp/lock files
+~$*
