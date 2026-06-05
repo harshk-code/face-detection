@@ -291,8 +291,10 @@ Liveness is implemented in:
 app/src/screens/OnboardFaceScreen.tsx
 ```
 
-The offline liveness gate accepts either a **blink** (eye-aspect-ratio dips closed then
-re-opens) or a **head-turn**, and the login match is blocked until liveness passes.
+The offline liveness gate draws **one challenge at random per login attempt** —
+**blink**, **smile**, **turn left**, or **turn right** — and accepts only that
+challenge, so a recording of a different gesture cannot be replayed. The login
+match is blocked until the required challenge passes.
 
 The app asks for:
 
@@ -907,14 +909,13 @@ Current limitations:
 - The match thresholds (`0.60` centroid / `0.80` pose-sample, with a 2-of-3 window and a
   0.82 strong-match) are tuned for one-to-one
   matching and should be validated on a larger local test set per deployment.
-- Liveness uses **blink (EAR)** and **head-turn**; a smile (mouth-aspect-ratio)
-  challenge is planned as a third option.
 - A full on-device FAR/FRR accuracy study across demographics/lighting is future work.
 
 Implemented in this submission:
 
-- **Offline liveness is gated on login** (blink or head-turn must pass before a match) —
-  closes the photo/replay attack on verification.
+- **Randomised offline liveness gate on login** — one of **blink / smile /
+  turn-left / turn-right** is required at random per attempt, and only that
+  challenge is accepted, closing the photo/replay attack on verification.
 - **Crash-safe encrypted offline queue** with **sync → purge-ack → local delete**
   (ACK-before-purge) on network restore.
 - **Multi-frame centroid enrollment** (front/left/right) with per-pose matching.
@@ -924,10 +925,9 @@ Implemented in this submission:
 Recommended next improvements:
 
 - add a real moving preview face bounding box with a performant frame processor
-- add a smile-based liveness challenge and continuous-frame liveness
+- move from capture-loop sampling to continuous-frame liveness
 - add image-quality checks: blur, brightness, face size, occlusion
-- tune thresholds on real target-device data; run a FAR/FRR study
-- add blink or smile challenge as a second liveness signal
+- tune the smile band and thresholds on real target-device data; run a FAR/FRR study
 - encrypt the local face template using platform keystore/keychain backed encryption
 
 ## Mental Model for Evaluators

@@ -73,11 +73,16 @@ Camera --> MediaPipe FaceMesh --> Liveness gate --> 112×112 crop
 
 ## Offline liveness (anti-spoofing)
 
-Two **scale-invariant** signals from FaceMesh — pass by **blink OR head-turn**:
+**One challenge is drawn at random per login** — blink / smile / turn-left /
+turn-right — and **only that one** is accepted, so a replayed clip of a different
+gesture fails. Each is a **scale-invariant** change in FaceMesh geometry:
 
 - **Blink** = Eye-Aspect-Ratio dips closed (≤0.19) then opens (≥0.27) across
   frames. A photo/screen holds constant EAR → **fails**.
-- **Head-turn** = nose offset / eye-distance ≥ 0.07.
+- **Smile** = mouth-width / inter-ocular ratio goes neutral (≤0.50) → widened
+  (≥0.58). A fixed smile in a photo holds a constant ratio → **fails**.
+- **Head-turn** = signed nose offset / eye-distance ≥ 0.07; direction (left vs
+  right) is preserved and reported to the backend.
 
 **The match is gated** — login refuses to run recognition until liveness passes,
 defeating the photo/replay attack. Logic is **pure & unit-tested**.
