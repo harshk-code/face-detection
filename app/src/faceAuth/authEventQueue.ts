@@ -8,6 +8,11 @@ type AuthEventInput = {
   latencyMs: number;
   matchResult: FaceMatchResult;
   template: FaceTemplate;
+  /** Offline liveness outcome for this attempt (defaults to a present face). */
+  liveness?: {
+    passed: boolean;
+    type: string;
+  };
 };
 
 export function enqueueAuthEventFireAndForget(input: AuthEventInput) {
@@ -17,6 +22,7 @@ export function enqueueAuthEventFireAndForget(input: AuthEventInput) {
 async function enqueueAuthEvent({
   capturedAt,
   latencyMs,
+  liveness,
   matchResult,
   template,
 }: AuthEventInput) {
@@ -28,7 +34,7 @@ async function enqueueAuthEvent({
         eventId,
         faceScore: Number(matchResult.score.toFixed(6)),
         latencyMs,
-        liveness: {
+        liveness: liveness ?? {
           passed: true,
           type: 'FACE_PRESENT',
         },

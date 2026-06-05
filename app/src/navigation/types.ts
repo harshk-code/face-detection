@@ -1,6 +1,7 @@
 import {Screens} from './constants';
 
 export type RootStackParamList = {
+  [Screens.Benchmark]: undefined;
   [Screens.Home]: undefined;
   [Screens.Intro]: undefined;
   [Screens.Login]: undefined;

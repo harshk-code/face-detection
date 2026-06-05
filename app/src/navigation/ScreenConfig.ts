@@ -2,6 +2,7 @@ import type {ComponentType} from 'react';
 import type {NativeStackNavigationOptions} from '@react-navigation/native-stack';
 
 import {
+  BenchmarkRoute,
   HomeRoute,
   IntroRoute,
   LoginRoute,
@@ -28,6 +29,10 @@ const DEV_SCREENS_CONFIG: RootScreenConfigItem[] = __DEV__
       {
         name: Screens.NetworkLogger,
         component: NetworkLoggerRoute,
+      },
+      {
+        name: Screens.Benchmark,
+        component: BenchmarkRoute,
       },
     ]
   : [];

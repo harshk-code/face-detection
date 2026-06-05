@@ -3,6 +3,7 @@ import {CommonActions} from '@react-navigation/native';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 
 import {useFaceAuth} from '../app/FaceAuthContext';
+import {BenchmarkScreen} from '../screens/BenchmarkScreen';
 import {LoadingScreen} from '../screens/LoadingScreen';
 import {HomeScreen} from '../screens/HomeScreen';
 import {IntroScreen} from '../screens/IntroScreen';
@@ -152,6 +153,13 @@ export function HomeRoute({navigation}: ScreenProps<'Home'>) {
             }
           : undefined
       }
+      onBenchmark={
+        __DEV__
+          ? () => {
+              navigation.navigate(Screens.Benchmark);
+            }
+          : undefined
+      }
       onUpdateOnboarding={async () => {
         const canContinue = await prepareOnboarding();
         if (canContinue) {
@@ -166,6 +174,7 @@ export function SyncStatusRoute({navigation}: ScreenProps<'SyncStatus'>) {
   const [snapshot, setSnapshot] = React.useState<SyncQueueSnapshot>({
     jobs: [],
     pendingCount: 0,
+    purgedCount: 0,
     syncedCount: 0,
   });
   const [isProcessing, setIsProcessing] = React.useState(false);
@@ -209,6 +218,32 @@ export function SyncStatusRoute({navigation}: ScreenProps<'SyncStatus'>) {
         } finally {
           setIsProcessing(false);
         }
+      }}
+    />
+  );
+}
+
+export function BenchmarkRoute({navigation}: ScreenProps<'Benchmark'>) {
+  const {localTemplate} = useFaceAuth();
+
+  if (!localTemplate) {
+    return (
+      <MissingTemplateRoute
+        onOnboard={() => navigation.navigate(Screens.OnboardScan)}
+      />
+    );
+  }
+
+  return (
+    <BenchmarkScreen
+      localTemplate={localTemplate}
+      onBack={() => {
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+          return;
+        }
+
+        navigation.navigate(Screens.Home);
       }}
     />
   );

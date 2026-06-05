@@ -6,6 +6,7 @@ import type {FaceTemplate} from '../faceAuth/types';
 
 type Props = {
   localTemplate: FaceTemplate;
+  onBenchmark?: () => void;
   onClearData: () => void;
   onLogin: () => void;
   onNetworkLogger?: () => void;
@@ -15,6 +16,7 @@ type Props = {
 
 export function HomeScreen({
   localTemplate,
+  onBenchmark,
   onClearData,
   onLogin,
   onNetworkLogger,
@@ -51,6 +53,13 @@ export function HomeScreen({
             label="Network Logs"
             variant="secondary"
             onPress={onNetworkLogger}
+          />
+        ) : null}
+        {__DEV__ && onBenchmark ? (
+          <ActionButton
+            label="Benchmark"
+            variant="secondary"
+            onPress={onBenchmark}
           />
         ) : null}
         <ActionButton
