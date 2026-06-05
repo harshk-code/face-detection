@@ -6,14 +6,20 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import {Alert, Linking} from 'react-native';
+import {Alert, AppState, Linking} from 'react-native';
 
+import {
+  clearSyncQueue,
+  enqueueRegisterUserJob,
+} from '../faceAuth/syncQueueStore';
+import {
+  processSyncQueue,
+} from '../faceAuth/syncQueueProcessor';
 import {
   clearStoredFaceTemplate,
   getStoredFaceTemplate,
   saveStoredFaceTemplate,
 } from '../faceAuth/localTemplateStore';
-import {registerOnboardingAndClient} from '../faceAuth/backendApi';
 import type {FaceEmbedding, FaceTemplate} from '../faceAuth/types';
 import {
   getCameraPermissionStatus,
@@ -37,6 +43,7 @@ type FaceAuthContextValue = {
 };
 
 const FaceAuthContext = createContext<FaceAuthContextValue | null>(null);
+const SYNC_RETRY_INTERVAL_MS = 15000;
 
 export function FaceAuthProvider({children}: {children: React.ReactNode}) {
   const [isHydrated, setIsHydrated] = useState(false);
@@ -62,6 +69,41 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
   useEffect(() => {
     void hydrateTemplate();
   }, [hydrateTemplate]);
+
+  const processQueueAndRefreshTemplate = useCallback(async (reason: string) => {
+    const snapshot = await processSyncQueue(reason);
+    const storedTemplate = await getStoredFaceTemplate();
+    setLocalTemplate(storedTemplate);
+    logInfo('app:sync-queue:refresh-complete', {
+      hasStoredTemplate: Boolean(storedTemplate),
+      pendingCount: snapshot.pendingCount,
+      reason,
+      syncedCount: snapshot.syncedCount,
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isHydrated) {
+      return undefined;
+    }
+
+    void processQueueAndRefreshTemplate('app-hydrated');
+
+    const interval = setInterval(() => {
+      void processQueueAndRefreshTemplate('retry-interval');
+    }, SYNC_RETRY_INTERVAL_MS);
+
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        void processQueueAndRefreshTemplate('app-active');
+      }
+    });
+
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [isHydrated, processQueueAndRefreshTemplate]);
 
   useEffect(() => {
     logInfo('app:navigation-state', {
@@ -185,16 +227,18 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
         templateId: template.templateId,
       });
       setLocalTemplate(template);
-      syncTemplateWithBackend(template);
+      await enqueueRegisterUserJob(template);
+      void processQueueAndRefreshTemplate('onboarding-template-saved');
     } catch (error) {
       logError('FaceAuthProvider.saveTemplate', error);
       throw error;
     }
-  }, []);
+  }, [processQueueAndRefreshTemplate]);
 
   const clearTemplateData = useCallback(async () => {
     logInfo('app:clear-data:start', {});
     await clearStoredFaceTemplate();
+    await clearSyncQueue();
     logInfo('app:clear-data:storage-cleared', {});
     setLocalTemplate(null);
     setPendingEmbedding(null);
@@ -229,37 +273,6 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
       {children}
     </FaceAuthContext.Provider>
   );
-
-  function syncTemplateWithBackend(template: FaceTemplate) {
-    void registerOnboardingAndClient(template)
-      .then(async backendIds => {
-        if (!backendIds) {
-          return;
-        }
-
-        const syncedTemplate: FaceTemplate = {
-          ...template,
-          backendClientId: backendIds.backendClientId,
-          backendSyncedAt: new Date().toISOString(),
-          backendUserId: backendIds.backendUserId,
-        };
-
-        await saveStoredFaceTemplate(syncedTemplate);
-        setLocalTemplate(currentTemplate =>
-          currentTemplate?.templateId === syncedTemplate.templateId
-            ? syncedTemplate
-            : currentTemplate,
-        );
-        logInfo('app:onboard-template:backend-ids-saved', {
-          backendClientId: backendIds.backendClientId,
-          backendUserId: backendIds.backendUserId,
-          personnelId: template.personnelId,
-        });
-      })
-      .catch(error => {
-        logError('app:onboard-template:backend-id-save-error', error);
-      });
-  }
 }
 
 export function useFaceAuth() {

@@ -8,6 +8,7 @@ import {
   OnboardFormRoute,
   OnboardScanRoute,
   ProfileRoute,
+  SyncStatusRoute,
 } from './routes';
 import {Screens} from './constants';
 
@@ -45,5 +46,9 @@ export const ROOT_SCREENS_CONFIG: RootScreenConfigItem[] = [
   {
     name: Screens.Profile,
     component: ProfileRoute,
+  },
+  {
+    name: Screens.SyncStatus,
+    component: SyncStatusRoute,
   },
 ];

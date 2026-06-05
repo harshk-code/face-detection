@@ -5,6 +5,7 @@ export const ROOT_STACK_SCREENS = {
   OnboardForm: 'OnboardForm',
   OnboardScan: 'OnboardScan',
   Profile: 'Profile',
+  SyncStatus: 'SyncStatus',
 } as const;
 
 export const Screens = {

@@ -8,6 +8,7 @@ type Props = {
   localTemplate: FaceTemplate;
   onClearData: () => void;
   onLogin: () => void;
+  onSyncStatus: () => void;
   onUpdateOnboarding: () => void;
 };
 
@@ -15,6 +16,7 @@ export function HomeScreen({
   localTemplate,
   onClearData,
   onLogin,
+  onSyncStatus,
   onUpdateOnboarding,
 }: Props) {
   return (
@@ -37,6 +39,11 @@ export function HomeScreen({
       </View>
 
       <View style={styles.bottomActions}>
+        <ActionButton
+          label="Sync Status"
+          variant="secondary"
+          onPress={onSyncStatus}
+        />
         <ActionButton
           label="Update Onboarding"
           variant="secondary"

@@ -7,4 +7,5 @@ export type RootStackParamList = {
   [Screens.OnboardForm]: undefined;
   [Screens.OnboardScan]: undefined;
   [Screens.Profile]: undefined;
+  [Screens.SyncStatus]: undefined;
 };

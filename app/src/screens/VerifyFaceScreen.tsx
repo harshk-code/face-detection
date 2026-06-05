@@ -5,7 +5,7 @@ import {CaptureScreen} from '../components/CaptureScreen';
 import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
 import {matchFaceEmbedding} from '../faceAuth/matching';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
-import {syncAuthEventFireAndForget} from '../faceAuth/backendApi';
+import {enqueueAuthEventFireAndForget} from '../faceAuth/authEventQueue';
 import type {
   CapturedFacePhoto,
   DetectedFaceSnapshot,
@@ -105,7 +105,7 @@ export function VerifyFaceScreen({
       });
       const liveEmbedding = await generateFaceEmbedding(faceCrop);
       const result = matchFaceEmbedding(liveEmbedding.vector, localTemplate);
-      syncAuthEventFireAndForget({
+      enqueueAuthEventFireAndForget({
         capturedAt: new Date().toISOString(),
         latencyMs: Date.now() - startedAt,
         matchResult: result,

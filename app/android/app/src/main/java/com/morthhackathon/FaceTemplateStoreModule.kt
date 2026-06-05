@@ -31,7 +31,25 @@ class FaceTemplateStoreModule(
     promise.resolve(true)
   }
 
+  @ReactMethod
+  fun getSyncQueue(promise: Promise) {
+    promise.resolve(preferences.getString(SYNC_QUEUE_KEY, null))
+  }
+
+  @ReactMethod
+  fun saveSyncQueue(queueJson: String, promise: Promise) {
+    preferences.edit().putString(SYNC_QUEUE_KEY, queueJson).apply()
+    promise.resolve(true)
+  }
+
+  @ReactMethod
+  fun clearSyncQueue(promise: Promise) {
+    preferences.edit().remove(SYNC_QUEUE_KEY).apply()
+    promise.resolve(true)
+  }
+
   private companion object {
+    const val SYNC_QUEUE_KEY = "offline_api_sync_queue_json"
     const val TEMPLATE_KEY = "local_face_template_json"
   }
 }
