@@ -9,7 +9,11 @@ color: #f7f8fa
 style: |
   section { font-size: 26px; }
   h1, h2 { color: #ffffff; }
-  table { font-size: 22px; }
+  table { font-size: 22px; border-collapse: collapse; }
+  table tr { background-color: #122c4f !important; }
+  th, td { border: 1px solid #3a5379 !important; padding: 6px 14px !important; background-color: #122c4f !important; color: #f7f8fa !important; }
+  th { background-color: #1d4374 !important; color: #ffffff !important; }
+  td strong { color: #7dd3fc; }
   strong { color: #7dd3fc; }
   code { color: #9be7c4; }
   a { color: #7dd3fc; }
@@ -50,7 +54,7 @@ Camera --> MediaPipe FaceMesh --> Liveness gate --> 112×112 crop
 
 - **100% on-device** authentication — no network needed to enroll or verify
 - Edge AI: **MobileFaceNet + ArcFace**, FP16, **6.5 MB**
-- Liveness: **blink (EAR)** + **head-turn**, both offline
+- Liveness: **randomized blink / smile / head-turn**, all offline
 - **Sync & purge** audit lifecycle to an AWS-deployable backend
 
 ---
@@ -148,7 +152,7 @@ Meets: Android 8.0+/iOS 12+ · 3 GB RAM · no GPU · ≤ 20 MB · offline.
 
 ## Roadmap
 
-- Add smile (mouth-aspect-ratio) as a third selectable liveness challenge
+- Continuous-frame liveness processing (beyond capture-loop sampling)
 - On-device FAR/FRR study across demographics & lighting
 - Native iOS TFLite delegate tuning (Core ML) for extra headroom
 - Hard-delete purged events server-side after a retention window
