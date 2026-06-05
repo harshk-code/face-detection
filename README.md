@@ -486,10 +486,14 @@ inputWidth: 112
 inputHeight: 112
 inputChannels: 3
 embeddingSize: 512
-similarityThreshold: 0.69
+similarityThreshold: 0.75
 normalizeMean: 127.5
 normalizeStd: 128
 ```
+
+Matching uses two thresholds (see `app/src/faceAuth/matching.ts`): the centroid
+cosine threshold `0.75`, and a stricter per-pose-sample threshold `0.80`. A match
+is accepted when the centroid score ≥ 0.75 **or** the best pose-sample score ≥ 0.80.
 
 The model file:
 
@@ -561,17 +565,18 @@ The comparison uses cosine similarity:
 similarity = dot(liveEmbedding, storedEmbedding) / (|liveEmbedding| * |storedEmbedding|)
 ```
 
-Current threshold:
+Current thresholds:
 
 ```text
-0.69
+centroid match: 0.75
+pose-sample match: 0.80
 ```
 
 Decision:
 
 ```text
-similarity >= threshold -> authenticated
-similarity < threshold  -> rejected
+centroidScore >= 0.75  OR  bestPoseSampleScore >= 0.80  -> authenticated
+otherwise                                               -> rejected
 ```
 
 The score is logged for debugging, but it is not displayed to the end user.
@@ -880,18 +885,28 @@ Current limitations:
 
 - MediaPipe validation is capture-loop based, not continuous live frame processing.
 - The preview guide box is static, while the actual detection happens after still capture.
-- The threshold `0.69` is tuned for one-to-one matching in the current prototype and should be validated on a larger local test set.
-- Liveness currently uses head-turn only.
-- Backend sync is fire-and-forget and does not yet include a persistent offline event queue.
-- The app stores a single local template; multi-user local search is intentionally not implemented for this one-to-one attendance/login flow.
+- The match thresholds (`0.75` centroid / `0.80` pose-sample) are tuned for one-to-one
+  matching and should be validated on a larger local test set per deployment.
+- Liveness uses **blink (EAR)** and **head-turn**; a smile (mouth-aspect-ratio)
+  challenge is planned as a third option.
+- A full on-device FAR/FRR accuracy study across demographics/lighting is future work.
+
+Implemented in this submission:
+
+- **Offline liveness is gated on login** (blink or head-turn must pass before a match) —
+  closes the photo/replay attack on verification.
+- **Crash-safe encrypted offline queue** with **sync → purge-ack → local delete**
+  (ACK-before-purge) on network restore.
+- **Multi-frame centroid enrollment** (front/left/right) with per-pose matching.
+- **Reusable SDK facade** (`app/src/faceAuth/sdk`) + integration guide (`docs/INTEGRATION.md`).
+- **In-app Benchmark screen** for on-device `< 1 s` latency measurement.
 
 Recommended next improvements:
 
 - add a real moving preview face bounding box with a performant frame processor
-- store multiple enrollment embeddings per user, such as front/left/right, and average or compare against all
-- save failed/success auth events in SQLite and purge only after confirmed backend sync
+- add a smile-based liveness challenge and continuous-frame liveness
 - add image-quality checks: blur, brightness, face size, occlusion
-- tune threshold on real target-device data
+- tune thresholds on real target-device data; run a FAR/FRR study
 - add blink or smile challenge as a second liveness signal
 - encrypt the local face template using platform keystore/keychain backed encryption
 

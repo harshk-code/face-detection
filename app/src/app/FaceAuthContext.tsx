@@ -6,7 +6,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import {Alert, AppState, Linking} from 'react-native';
+import {Alert, AppState, Linking, NativeModules} from 'react-native';
 
 import {
   clearSyncQueue,
@@ -318,6 +318,14 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
 }
 
 function getNetInfoModule(): NetInfoModule | null {
+  // The netinfo JS wrapper throws at import time if its native module is not
+  // linked into the build. Probe the native module first so a missing/older
+  // native build degrades gracefully (interval + manual sync still work)
+  // instead of surfacing a dev red-box. Rebuild the app to enable
+  // reconnect-triggered sync.
+  if (!NativeModules.RNCNetInfo) {
+    return null;
+  }
   try {
     return require('@react-native-community/netinfo').default as NetInfoModule;
   } catch {

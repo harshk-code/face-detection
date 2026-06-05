@@ -46,7 +46,10 @@ export type SyncQueueJob =
 export type SyncQueueSnapshot = {
   jobs: SyncQueueJob[];
   pendingCount: number;
+  /** Jobs marked synced but not yet purged (legacy/transient). */
   syncedCount: number;
+  /** Events synced AND purged from this device since launch. */
+  purgedCount: number;
 };
 
 type SyncQueueListener = (snapshot: SyncQueueSnapshot) => void;
@@ -65,6 +68,10 @@ type SyncJobBase = {
 const MAX_SYNCED_JOBS_TO_KEEP = 50;
 
 let memoryQueue: SyncQueueJob[] = [];
+// Running tally of events that completed the full sync → purge-ack → local
+// delete lifecycle. In-memory (per launch) — enough to demonstrate the
+// offline→online purge story live on the Sync Status screen.
+let purgedCount = 0;
 const listeners = new Set<SyncQueueListener>();
 
 export async function getSyncQueueSnapshot(): Promise<SyncQueueSnapshot> {
@@ -159,6 +166,31 @@ export async function clearSyncQueue() {
   await clearNativeSyncQueue();
   logInfo('sync-queue:clear', {});
   emitSyncQueueChange(memoryQueue);
+}
+
+/**
+ * Permanently remove a job from the local queue — used after a successful
+ * sync (and, for auth events, a confirmed purge-ack) so device data is
+ * actually purged rather than retained as history. This is the local half of
+ * the spec's "sync with server … (local data to be purged)" requirement.
+ */
+export async function deleteSyncJob(jobId: string) {
+  await deleteSyncJobs([jobId]);
+}
+
+export async function deleteSyncJobs(jobIds: string[]) {
+  if (jobIds.length === 0) {
+    return;
+  }
+  const remove = new Set(jobIds);
+  const jobs = await readSyncQueue();
+  const next = jobs.filter(job => !remove.has(job.id));
+  const removed = jobs.length - next.length;
+  if (removed > 0) {
+    purgedCount += removed;
+    await writeSyncQueue(next);
+    logInfo('sync-queue:purge', {purgedJobIds: jobIds, purgedTotal: purgedCount});
+  }
 }
 
 async function upsertSyncQueueJob<
@@ -273,6 +305,7 @@ function createSnapshot(jobs: SyncQueueJob[]): SyncQueueSnapshot {
   return {
     jobs,
     pendingCount: jobs.filter(job => job.status !== 'synced').length,
+    purgedCount,
     syncedCount: jobs.filter(job => job.status === 'synced').length,
   };
 }

@@ -1,13 +1,14 @@
 import {
   postAuthEvent,
+  postPurgeAck,
   registerBackendClient,
   registerBackendUser,
 } from './backendApi';
 import {
+  deleteSyncJob,
   enqueueRegisterClientJob,
   getSyncQueueSnapshot,
   markSyncJobPending,
-  markSyncJobSynced,
   markSyncJobSyncing,
   type AuthEventJob,
   type RegisterClientJob,
@@ -40,7 +41,9 @@ export async function processSyncQueue(
 
   try {
     let snapshot = await getSyncQueueSnapshot();
-    const pendingJobs = snapshot.jobs.filter(job => job.status !== 'synced');
+    // A job that has already synced+purged is gone from the queue, so every
+    // remaining job is actionable.
+    const pendingJobs = [...snapshot.jobs];
 
     for (const job of pendingJobs) {
       await processJob(job);
@@ -70,7 +73,11 @@ async function processJob(job: SyncQueueJob) {
       await processAuthEventJob(job);
     }
 
-    await markSyncJobSynced(job.id);
+    // Synced (and, for auth events, purge-acked) successfully — purge the
+    // local row. Backend ids from register jobs are already persisted onto the
+    // stored template, so nothing is lost by deleting the queue entry.
+    await deleteSyncJob(job.id);
+    logInfo('sync-queue:processor:job-purged', {id: job.id, type: job.type});
   } catch (error) {
     logError('sync-queue:processor:job-error', error);
     await markSyncJobPending(job.id, error);
@@ -156,10 +163,26 @@ async function processAuthEventJob(job: AuthEventJob) {
     throw new Error('Waiting for backend client id before auth event sync.');
   }
 
-  await postAuthEvent(currentTemplate.backendClientId, {
+  const {eventId} = job.payload.event;
+  const syncResult = await postAuthEvent(currentTemplate.backendClientId, {
     ...job.payload.event,
     userId: currentTemplate.backendUserId ?? job.payload.event.userId,
   });
+
+  // Server-confirmed = newly accepted OR already on the server (duplicate).
+  // Only these are safe to purge; a rejected event stays queued (and will be
+  // surfaced as failed) so we never delete data the server didn't accept.
+  const confirmed = new Set([
+    ...(syncResult.acceptedEventIds ?? []),
+    ...(syncResult.duplicateEventIds ?? []),
+  ]);
+  if (!confirmed.has(eventId)) {
+    throw new Error(`Auth event ${eventId} was not accepted by the server.`);
+  }
+
+  // Acknowledge the purge to the backend, then let processJob delete the local
+  // row — completing the sync → purge lifecycle.
+  await postPurgeAck(currentTemplate.backendClientId, [eventId]);
 }
 
 function getActiveTemplate(
