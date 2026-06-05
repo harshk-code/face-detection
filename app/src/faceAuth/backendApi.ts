@@ -4,6 +4,7 @@ import DeviceInfo from 'react-native-device-info';
 import {FACE_AUTH_CONFIG} from './modelConfig';
 import {enqueueAuthEvent} from './authEventQueue';
 import {API_BASE_URL, TENANT_ID} from './backendClient';
+import type {AuthEventResult} from './syncQueue';
 import type {FaceMatchResult, FaceTemplate} from './types';
 import {logError, logInfo} from '../utils/logError';
 
@@ -27,7 +28,18 @@ type AuthEventInput = {
   latencyMs: number;
   matchResult: FaceMatchResult;
   template: FaceTemplate;
+  /** Liveness outcome for this attempt; omit when no liveness gate ran. */
+  livenessPassed?: boolean;
+  challengeTypes?: string[];
 };
+
+/** Map an attempt to the backend's result enum: liveness failure dominates. */
+function resolveResult(input: AuthEventInput): AuthEventResult {
+  if (input.livenessPassed === false) {
+    return 'LIVENESS_FAILED';
+  }
+  return input.matchResult.matched ? 'SUCCESS' : 'FACE_FAILED';
+}
 
 export async function registerOnboardingAndClient(
   template: FaceTemplate,
@@ -110,12 +122,14 @@ export function syncAuthEventFireAndForget(input: AuthEventInput) {
     clientId: template.backendClientId,
     capturedAt,
     faceScore: Number(matchResult.score.toFixed(6)),
-    result: matchResult.matched ? 'SUCCESS' : 'FAILED',
+    livenessScore: input.livenessPassed === false ? 0 : 1,
+    challengeTypes: input.challengeTypes ?? [],
+    result: resolveResult(input),
+    failureReason: matchResult.matched ? undefined : 'face below threshold',
     threshold: matchResult.threshold,
     modelVersion: template.modelVersion,
     userId: template.backendUserId ?? null,
     latencyMs,
-    liveness: {passed: true, type: 'FACE_PRESENT'},
   });
 }
 

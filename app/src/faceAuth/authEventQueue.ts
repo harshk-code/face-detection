@@ -41,16 +41,19 @@ export const backendSyncTransport: SyncTransport = {
   },
 };
 
+/** Shaped to the backend's SyncEventInput (services.go). Embeddings are never
+ * sent — only the abstract auth result, preserving on-device biometric privacy. */
 function toWireEvent(event: QueuedAuthEvent) {
   return {
-    capturedAt: event.capturedAt,
     eventId: event.eventId,
-    faceScore: event.faceScore,
-    latencyMs: event.latencyMs,
-    liveness: event.liveness,
-    modelVersion: event.modelVersion,
     result: event.result,
-    threshold: event.threshold,
+    failureReason: event.failureReason ?? '',
+    faceScore: event.faceScore,
+    livenessScore: event.livenessScore,
+    challengeTypes: event.challengeTypes,
+    latencyMs: event.latencyMs,
+    capturedAt: event.capturedAt,
+    modelVersion: event.modelVersion,
     userId: event.userId,
   };
 }

@@ -6,7 +6,7 @@ import React, {
   useMemo,
   useState,
 } from 'react';
-import {Alert, Linking} from 'react-native';
+import {Alert, AppState, Linking} from 'react-native';
 
 import {
   clearStoredFaceTemplate,
@@ -68,6 +68,21 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
   useEffect(() => {
     void hydrateTemplate();
   }, [hydrateTemplate]);
+
+  // Drain the offline auth-event queue whenever the app returns to foreground
+  // (a good proxy for "connectivity may have returned").
+  useEffect(() => {
+    const clientId = localTemplate?.backendClientId;
+    if (!clientId) {
+      return;
+    }
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState === 'active') {
+        void flushAuthEvents(clientId);
+      }
+    });
+    return () => subscription.remove();
+  }, [localTemplate?.backendClientId]);
 
   useEffect(() => {
     logInfo('app:navigation-state', {

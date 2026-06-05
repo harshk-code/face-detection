@@ -617,8 +617,12 @@ func (s *Service) validateSyncEvent(resolved ResolvedClientContext, event SyncEv
 	if err := ValidateTenantConfig(resolved.User.Configs); err != nil {
 		return "user config is missing or invalid"
 	}
-	if err := ValidateEventEmbedding(event.Embedding, resolved.User.Configs.ModelConfig.EmbeddingDimension); err != nil {
-		return err.Error()
+	// Embedding is optional on the wire: on-device auth keeps biometrics local
+	// and syncs only the abstract result. Validate the dimension only if present.
+	if len(event.Embedding) > 0 {
+		if err := ValidateEventEmbedding(event.Embedding, resolved.User.Configs.ModelConfig.EmbeddingDimension); err != nil {
+			return err.Error()
+		}
 	}
 	if resolved.Client.Status == domain.StatusInactive && resolved.Client.DeactivatedAt != nil && !event.CapturedAt.Before(*resolved.Client.DeactivatedAt) {
 		return "event captured after client deactivation"

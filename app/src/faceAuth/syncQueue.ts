@@ -18,17 +18,26 @@
  * before (a) leaves them synced=false; they are re-sent and deduped by eventId.
  */
 
+/** Matches the backend's accepted auth-event result values. */
+export type AuthEventResult =
+  | 'SUCCESS'
+  | 'FACE_FAILED'
+  | 'LIVENESS_FAILED'
+  | 'ERROR';
+
 export type QueuedAuthEvent = {
   eventId: string;
   clientId: string;
   capturedAt: string;
   faceScore: number;
-  result: 'SUCCESS' | 'FAILED';
+  livenessScore: number;
+  challengeTypes: string[];
+  result: AuthEventResult;
+  failureReason?: string;
   threshold: number;
   modelVersion: string;
   userId: string | null;
   latencyMs: number;
-  liveness: {passed: boolean; type: string};
   synced: boolean;
 };
 

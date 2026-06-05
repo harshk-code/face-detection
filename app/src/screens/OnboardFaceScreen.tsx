@@ -3,6 +3,7 @@ import {StyleSheet, Text, View} from 'react-native';
 
 import {CaptureScreen} from '../components/CaptureScreen';
 import {generateFaceEmbedding} from '../faceAuth/embeddingModel';
+import {averageEmbeddings} from '../faceAuth/enrollment';
 import {createNormalizedFaceCrop} from '../faceAuth/preprocessing';
 import type {CapturedFacePhoto, FaceEmbedding} from '../faceAuth/types';
 import {
@@ -25,6 +26,12 @@ const OPPOSITE_FACE_CENTER_DELTA_RATIO = 0.025;
 const FIRST_AUTO_CAPTURE_DELAY_MS = 850;
 const AUTO_CAPTURE_RETRY_DELAY_MS = 1050;
 const NEXT_STEP_DELAY_MS = 650;
+// Enroll from several frames and average the embeddings for a robust template.
+const ENROLL_FRAME_COUNT = 3;
+const MIN_ENROLL_FRAMES = 2;
+const ENROLL_FRAME_GAP_MS = 180;
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 type HeadTurnResult = ReturnType<typeof evaluateHeadTurn>;
 
@@ -84,14 +91,44 @@ export function OnboardFaceScreen({onBack, onFaceDataReady}: Props) {
       });
 
       if (currentStep === 'capture-face') {
-        const faceCrop = await createNormalizedFaceCrop({
-          photoHeight,
-          photoPath: path,
-          photoWidth,
-        });
-        const embedding = await generateFaceEmbedding(faceCrop);
+        const vectors: number[][] = [];
+        let modelVersion = '';
+        for (let frame = 0; frame < ENROLL_FRAME_COUNT; frame += 1) {
+          const photo =
+            frame === 0
+              ? {path, photoHeight, photoWidth}
+              : await capturePhotoRef.current();
+          try {
+            const faceCrop = await createNormalizedFaceCrop({
+              photoHeight: photo.photoHeight,
+              photoPath: photo.path,
+              photoWidth: photo.photoWidth,
+            });
+            const frameEmbedding = await generateFaceEmbedding(faceCrop);
+            vectors.push(frameEmbedding.vector);
+            modelVersion = frameEmbedding.modelVersion;
+          } catch (frameError) {
+            logWarning('face-auth:onboard:frame-skip', frameError);
+          }
+          if (frame < ENROLL_FRAME_COUNT - 1) {
+            await delay(ENROLL_FRAME_GAP_MS);
+          }
+        }
+
+        if (vectors.length < MIN_ENROLL_FRAMES) {
+          setStatus('Hold steady for a clear capture');
+          setError('Could not capture enough clear frames. Try again.');
+          scheduleAutoCapture(AUTO_CAPTURE_RETRY_DELAY_MS);
+          return;
+        }
+
+        const embedding: FaceEmbedding = {
+          vector: averageEmbeddings(vectors),
+          modelVersion,
+        };
 
         logInfo('face-auth:onboard:embedding-ready', {
+          framesUsed: vectors.length,
           modelVersion: embedding.modelVersion,
           vectorLength: embedding.vector.length,
           vectorSample: embedding.vector

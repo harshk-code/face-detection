@@ -15,12 +15,13 @@ function makeEvent(
     clientId,
     capturedAt: '2026-06-05T10:00:00.000Z',
     faceScore: 0.9,
+    livenessScore: 1,
+    challengeTypes: ['BLINK'],
     result: 'SUCCESS',
     threshold: 0.69,
     modelVersion: 'm-v1',
     userId: 'u1',
     latencyMs: 120,
-    liveness: {passed: true, type: 'BLINK'},
   };
 }
 
