@@ -11,6 +11,7 @@ import (
 
 	"face-detection-backend/internal/config"
 	"face-detection-backend/internal/httpapi"
+	"face-detection-backend/internal/service"
 	"face-detection-backend/internal/store"
 )
 
@@ -32,6 +33,9 @@ func main() {
 
 	if err := mongoStore.EnsureIndexes(ctx); err != nil {
 		log.Fatalf("ensure mongo indexes: %v", err)
+	}
+	if err := service.New(mongoStore).EnsureDefaultTenant(ctx); err != nil {
+		log.Fatalf("ensure default tenant: %v", err)
 	}
 
 	router := httpapi.NewRouter(mongoStore)
