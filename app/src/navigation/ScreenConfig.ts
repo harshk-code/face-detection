@@ -5,9 +5,11 @@ import {
   HomeRoute,
   IntroRoute,
   LoginRoute,
+  NetworkLoggerRoute,
   OnboardFormRoute,
   OnboardScanRoute,
   ProfileRoute,
+  SyncStatusRoute,
 } from './routes';
 import {Screens} from './constants';
 
@@ -20,6 +22,15 @@ export interface RootScreenConfigItem<
   name: Name;
   options?: NativeStackNavigationOptions;
 }
+
+const DEV_SCREENS_CONFIG: RootScreenConfigItem[] = __DEV__
+  ? [
+      {
+        name: Screens.NetworkLogger,
+        component: NetworkLoggerRoute,
+      },
+    ]
+  : [];
 
 export const ROOT_SCREENS_CONFIG: RootScreenConfigItem[] = [
   {
@@ -46,4 +57,9 @@ export const ROOT_SCREENS_CONFIG: RootScreenConfigItem[] = [
     name: Screens.Profile,
     component: ProfileRoute,
   },
+  {
+    name: Screens.SyncStatus,
+    component: SyncStatusRoute,
+  },
+  ...DEV_SCREENS_CONFIG,
 ];

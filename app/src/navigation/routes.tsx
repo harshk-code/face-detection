@@ -6,10 +6,17 @@ import {useFaceAuth} from '../app/FaceAuthContext';
 import {LoadingScreen} from '../screens/LoadingScreen';
 import {HomeScreen} from '../screens/HomeScreen';
 import {IntroScreen} from '../screens/IntroScreen';
+import {NetworkLoggerScreen} from '../screens/NetworkLoggerScreen';
 import {OnboardFaceScreen} from '../screens/OnboardFaceScreen';
 import {OnboardUserFormScreen} from '../screens/OnboardUserFormScreen';
 import {ProfileScreen} from '../screens/ProfileScreen';
+import {SyncStatusScreen} from '../screens/SyncStatusScreen';
 import {VerifyFaceScreen} from '../screens/VerifyFaceScreen';
+import {
+  flushAuthEvents,
+  getAuthEventQueueSnapshot,
+} from '../faceAuth/authEventQueue';
+import type {SyncQueueSnapshot} from '../faceAuth/syncQueue';
 import {logInfo} from '../utils/logError';
 import {Screens} from './constants';
 
@@ -134,11 +141,91 @@ export function HomeRoute({navigation}: ScreenProps<'Home'>) {
           navigation.navigate(Screens.Login);
         }
       }}
+      onSyncStatus={() => {
+        navigation.navigate(Screens.SyncStatus);
+      }}
+      onNetworkLogger={
+        __DEV__
+          ? () => {
+              navigation.navigate(Screens.NetworkLogger);
+            }
+          : undefined
+      }
       onUpdateOnboarding={async () => {
         const canContinue = await prepareOnboarding();
         if (canContinue) {
           navigation.navigate(Screens.OnboardScan);
         }
+      }}
+    />
+  );
+}
+
+export function SyncStatusRoute({navigation}: ScreenProps<'SyncStatus'>) {
+  const {localTemplate} = useFaceAuth();
+  const clientId = localTemplate?.backendClientId;
+  const [snapshot, setSnapshot] = React.useState<SyncQueueSnapshot>({
+    events: [],
+    pendingCount: 0,
+    syncedCount: 0,
+    totalCount: 0,
+  });
+  const [isProcessing, setIsProcessing] = React.useState(false);
+
+  React.useEffect(() => {
+    let isMounted = true;
+
+    void getAuthEventQueueSnapshot(clientId).then(nextSnapshot => {
+      if (isMounted) {
+        setSnapshot(nextSnapshot);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [clientId]);
+
+  return (
+    <SyncStatusScreen
+      isProcessing={isProcessing}
+      snapshot={snapshot}
+      onBack={() => {
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+          return;
+        }
+
+        navigation.navigate(Screens.Home);
+      }}
+      onRetry={async () => {
+        setIsProcessing(true);
+        try {
+          if (clientId) {
+            await flushAuthEvents(clientId);
+          }
+          const nextSnapshot = await getAuthEventQueueSnapshot(clientId);
+          setSnapshot(nextSnapshot);
+        } finally {
+          setIsProcessing(false);
+        }
+      }}
+    />
+  );
+}
+
+export function NetworkLoggerRoute({
+  navigation,
+}: ScreenProps<'NetworkLogger'>) {
+  return (
+    <NetworkLoggerScreen
+      onBack={() => {
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+          return;
+        }
+
+        navigation.navigate(Screens.Home);
       }}
     />
   );

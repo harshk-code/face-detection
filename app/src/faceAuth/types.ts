@@ -1,6 +1,16 @@
 export type FaceEmbedding = {
   vector: number[];
   modelVersion: string;
+  samples?: EnrollmentEmbedding[];
+};
+
+export type EnrollmentPose = 'front' | 'left' | 'right';
+
+export type EnrollmentEmbedding = {
+  capturedAt: string;
+  modelVersion: string;
+  pose: EnrollmentPose;
+  vector: number[];
 };
 
 export type NormalizedFaceCrop = {
@@ -59,6 +69,7 @@ export type FaceTemplate = {
   personnelId: string;
   displayName: string;
   embedding: number[];
+  enrollmentEmbeddings?: EnrollmentEmbedding[];
   modelVersion: string;
   threshold: number;
   createdAt: string;

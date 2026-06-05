@@ -5,8 +5,10 @@
  */
 import {
   SyncQueue,
+  type FlushSummary,
   type QueuedAuthEvent,
   type SyncEventInput,
+  type SyncQueueSnapshot,
   type SyncTransport,
 } from './syncQueue';
 import {createNativeEventStore} from './nativeEventStore';
@@ -65,17 +67,31 @@ export async function enqueueAuthEvent(input: SyncEventInput): Promise<void> {
 }
 
 /** Flush any queued events for a client; never throws (offline-safe). */
-export async function flushAuthEvents(clientId: string): Promise<void> {
+export async function flushAuthEvents(
+  clientId: string,
+): Promise<FlushSummary | null> {
   try {
     const summary = await queue.flush(clientId, backendSyncTransport);
     if (summary.attempted > 0 || summary.purged > 0) {
       logInfo('authEventQueue.flush', summary);
     }
+    return summary;
   } catch (error) {
     logError('authEventQueue.flush:error', error);
+    return null;
   }
 }
 
 export async function pendingAuthEventCount(): Promise<number> {
   return queue.pendingCount();
+}
+
+export async function getAuthEventQueueSnapshot(
+  clientId?: string,
+): Promise<SyncQueueSnapshot> {
+  return queue.snapshot(clientId);
+}
+
+export async function clearAuthEvents(): Promise<void> {
+  await queue.clear();
 }

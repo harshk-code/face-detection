@@ -1681,6 +1681,35 @@ PODS:
     - SocketRocket
     - TensorFlowLiteC (= 2.17.0)
     - Yoga
+  - react-native-netinfo (12.0.1):
+    - boost
+    - DoubleConversion
+    - fast_float
+    - fmt
+    - glog
+    - hermes-engine
+    - RCT-Folly
+    - RCT-Folly/Fabric
+    - RCTRequired
+    - RCTTypeSafety
+    - React-Core
+    - React-debug
+    - React-Fabric
+    - React-featureflags
+    - React-graphics
+    - React-hermes
+    - React-ImageManager
+    - React-jsi
+    - React-NativeModulesApple
+    - React-RCTFabric
+    - React-renderercss
+    - React-rendererdebug
+    - React-utils
+    - ReactCodegen
+    - ReactCommon/turbomodule/bridging
+    - ReactCommon/turbomodule/core
+    - SocketRocket
+    - Yoga
   - react-native-safe-area-context (5.8.0):
     - boost
     - DoubleConversion
@@ -2399,6 +2428,7 @@ DEPENDENCIES:
   - React-Mapbuffer (from `../node_modules/react-native/ReactCommon`)
   - React-microtasksnativemodule (from `../node_modules/react-native/ReactCommon/react/nativemodule/microtasks`)
   - react-native-fast-tflite (from `../node_modules/react-native-fast-tflite`)
+  - "react-native-netinfo (from `../node_modules/@react-native-community/netinfo`)"
   - react-native-safe-area-context (from `../node_modules/react-native-safe-area-context`)
   - react-native-worklets-core (from `../node_modules/react-native-worklets-core`)
   - React-NativeModulesApple (from `../node_modules/react-native/ReactCommon/react/nativemodule/core/platform/ios`)
@@ -2529,6 +2559,8 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/react/nativemodule/microtasks"
   react-native-fast-tflite:
     :path: "../node_modules/react-native-fast-tflite"
+  react-native-netinfo:
+    :path: "../node_modules/@react-native-community/netinfo"
   react-native-safe-area-context:
     :path: "../node_modules/react-native-safe-area-context"
   react-native-worklets-core:
@@ -2648,6 +2680,7 @@ SPEC CHECKSUMS:
   React-Mapbuffer: a5d550d1add940ed2bc65b20dc1413407bf1a63f
   React-microtasksnativemodule: 5d00fefc19f0bc9a6432e5533683d6fc9c3da4e1
   react-native-fast-tflite: aec18e992eb8d6043aad39fe0afa7638ebec9749
+  react-native-netinfo: 08b130eee5af609cc3430542366d39186d2d6cef
   react-native-safe-area-context: c25747baf773a55813c32caa143c50ee326c4ba2
   react-native-worklets-core: a43929b17bc4a01d6ec89c3946afad5175a29ec9
   React-NativeModulesApple: b22e6abb44d78270dfdfc7d85efe29e35e0333a7

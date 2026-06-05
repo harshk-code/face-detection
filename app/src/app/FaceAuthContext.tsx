@@ -14,7 +14,7 @@ import {
   saveStoredFaceTemplate,
 } from '../faceAuth/localTemplateStore';
 import {registerOnboardingAndClient} from '../faceAuth/backendApi';
-import {flushAuthEvents} from '../faceAuth/authEventQueue';
+import {clearAuthEvents, flushAuthEvents} from '../faceAuth/authEventQueue';
 import type {FaceEmbedding, FaceTemplate} from '../faceAuth/types';
 import {
   getCameraPermissionStatus,
@@ -24,6 +24,18 @@ import {logError, logInfo} from '../utils/logError';
 import {traceNative} from '../utils/nativeTrace';
 
 type CameraPurpose = 'login' | 'onboarding';
+
+type NetInfoState = {
+  isConnected: boolean | null;
+  isInternetReachable: boolean | null;
+  type: string;
+};
+
+type NetInfoModule = {
+  addEventListener: (
+    listener: (state: NetInfoState) => void,
+  ) => () => void;
+};
 
 type FaceAuthContextValue = {
   clearTemplateData: () => Promise<void>;
@@ -82,6 +94,39 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
       }
     });
     return () => subscription.remove();
+  }, [localTemplate?.backendClientId]);
+
+  useEffect(() => {
+    const clientId = localTemplate?.backendClientId;
+    if (!clientId) {
+      return undefined;
+    }
+
+    const netInfo = getNetInfoModule();
+    if (!netInfo) {
+      logInfo('app:network-state:unavailable', {
+        reason: 'netinfo-module-not-installed',
+      });
+      return undefined;
+    }
+
+    const unsubscribe = netInfo.addEventListener(state => {
+      const isOnline =
+        state.isConnected === true && state.isInternetReachable !== false;
+
+      logInfo('app:network-state', {
+        isConnected: state.isConnected,
+        isInternetReachable: state.isInternetReachable,
+        isOnline,
+        type: state.type,
+      });
+
+      if (isOnline) {
+        void flushAuthEvents(clientId);
+      }
+    });
+
+    return unsubscribe;
   }, [localTemplate?.backendClientId]);
 
   useEffect(() => {
@@ -216,6 +261,7 @@ export function FaceAuthProvider({children}: {children: React.ReactNode}) {
   const clearTemplateData = useCallback(async () => {
     logInfo('app:clear-data:start', {});
     await clearStoredFaceTemplate();
+    await clearAuthEvents();
     logInfo('app:clear-data:storage-cleared', {});
     setLocalTemplate(null);
     setPendingEmbedding(null);
@@ -290,4 +336,12 @@ export function useFaceAuth() {
   }
 
   return value;
+}
+
+function getNetInfoModule(): NetInfoModule | null {
+  try {
+    return require('@react-native-community/netinfo').default as NetInfoModule;
+  } catch {
+    return null;
+  }
 }

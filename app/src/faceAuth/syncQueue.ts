@@ -76,6 +76,13 @@ export type FlushSummary = {
   remaining: number;
 };
 
+export type SyncQueueSnapshot = {
+  events: QueuedAuthEvent[];
+  pendingCount: number;
+  syncedCount: number;
+  totalCount: number;
+};
+
 const DEFAULT_BATCH_SIZE = 50;
 const DEFAULT_MAX_QUEUE = 500;
 
@@ -112,6 +119,23 @@ export class SyncQueue {
   async pendingCount(): Promise<number> {
     const events = await this.store.load();
     return events.length;
+  }
+
+  async snapshot(clientId?: string): Promise<SyncQueueSnapshot> {
+    const events = (await this.store.load()).filter(
+      event => !clientId || event.clientId === clientId,
+    );
+
+    return {
+      events,
+      pendingCount: events.filter(event => !event.synced).length,
+      syncedCount: events.filter(event => event.synced).length,
+      totalCount: events.length,
+    };
+  }
+
+  async clear(): Promise<void> {
+    await this.store.save([]);
   }
 
   /**

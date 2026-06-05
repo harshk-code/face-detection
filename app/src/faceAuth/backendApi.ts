@@ -14,11 +14,19 @@ type BackendOnboardingResult = {
 };
 
 type UserOnboardingResponse = {
+  data?: {
+    id?: string;
+    userId?: string;
+  };
   id?: string;
   userId?: string;
 };
 
 type ClientRegistrationResponse = {
+  data?: {
+    clientId?: string;
+    id?: string;
+  };
   clientId?: string;
   id?: string;
 };
@@ -53,6 +61,12 @@ export async function registerOnboardingAndClient(
         createdAt: template.createdAt,
         embedding: template.embedding,
         embeddingDimension: template.embedding.length,
+        enrollmentEmbeddings: template.enrollmentEmbeddings?.map(sample => ({
+          capturedAt: sample.capturedAt,
+          modelVersion: sample.modelVersion,
+          pose: sample.pose,
+          vector: sample.vector,
+        })),
         modelAssetName: FACE_AUTH_CONFIG.modelAssetName,
         modelVersion: template.modelVersion,
         similarityThreshold: template.threshold,
@@ -66,7 +80,11 @@ export async function registerOnboardingAndClient(
       app: await getAppPayload(),
     });
 
-    const backendUserId = userResponse.id ?? userResponse.userId;
+    const backendUserId =
+      userResponse.id ??
+      userResponse.userId ??
+      userResponse.data?.id ??
+      userResponse.data?.userId;
     if (!backendUserId) {
       throw new Error('Backend onboarding response did not include user id.');
     }
@@ -82,7 +100,11 @@ export async function registerOnboardingAndClient(
       },
     );
 
-    const backendClientId = clientResponse.clientId ?? clientResponse.id;
+    const backendClientId =
+      clientResponse.clientId ??
+      clientResponse.id ??
+      clientResponse.data?.clientId ??
+      clientResponse.data?.id;
     if (!backendClientId) {
       throw new Error('Backend client response did not include client id.');
     }
@@ -134,11 +156,14 @@ export function syncAuthEventFireAndForget(input: AuthEventInput) {
 }
 
 async function postJson<ResponseBody>(path: string, body: unknown) {
+  const url = `${API_BASE_URL.replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
+
   logInfo('backend:request', {
     path,
+    url,
   });
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(url, {
     body: JSON.stringify(body),
     headers: {
       'Content-Type': 'application/json',
@@ -147,16 +172,29 @@ async function postJson<ResponseBody>(path: string, body: unknown) {
     method: 'POST',
   });
 
+  if (!response.ok) {
+    const responseText = await response.text();
+    logError('backend:request:failed', {
+      path,
+      responseText,
+      status: response.status,
+      url,
+    });
+    throw new Error(
+      `Backend request failed ${response.status}: ${responseText}`,
+    );
+  }
+
   const responseText = await response.text();
   const responseBody = responseText
     ? (JSON.parse(responseText) as ResponseBody)
     : ({} as ResponseBody);
 
-  if (!response.ok) {
-    throw new Error(
-      `Backend request failed ${response.status}: ${responseText}`,
-    );
-  }
+  logInfo('backend:request:success', {
+    path,
+    status: response.status,
+    url,
+  });
 
   return responseBody;
 }

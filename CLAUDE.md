@@ -53,8 +53,9 @@ backend `go test` passes; app `yarn test` = **41/41**, `tsc` = 0 errors.
 4. **Offline profiles are Ed25519-signed.** `GET /api/signing/public-key` +
    `POST /api/verify-profile`. Set `PROFILE_SIGNING_SEED` to a stable base64 32-byte seed;
    otherwise an ephemeral key is generated (logged).
-5. **App backend URL** is `https://api.cars24.com/gw/plt/bffsvc` in
-   `app/src/faceAuth/backendClient.ts`. Point at the local backend for end-to-end testing.
+5. **App backend URL** is `https://c24-bff-service-stage.qac24svc.dev/` in
+   `app/src/faceAuth/backendClient.ts`. Point it at the local backend for local
+   end-to-end testing.
 6. **Embeddings are never sent on the wire.** Sync events carry only the abstract result;
    the backend treats embedding as optional (`hasMobileEventFields`).
 7. **Android 16 / 16 KB pages.** On Android 15+ a "not 16 KB-compatible" advisory may show

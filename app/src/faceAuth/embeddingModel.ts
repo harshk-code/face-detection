@@ -1,5 +1,6 @@
 import {FACE_AUTH_CONFIG} from './modelConfig';
 import type {FaceEmbedding, NormalizedFaceCrop} from './types';
+import {l2Normalize as normalizeVector} from './vectorMath';
 import {logError, logInfo} from '../utils/logError';
 
 type TensorflowLiteModel = {
@@ -177,7 +178,7 @@ function l2Normalize(vector: number[]) {
     throw new Error('MobileFaceNet returned an empty embedding.');
   }
 
-  const normalized = vector.map(value => value / magnitude);
+  const normalized = normalizeVector(vector);
   logInfo('face-auth:embedding:normalized', {
     magnitude,
     sample: normalized.slice(0, 12),
